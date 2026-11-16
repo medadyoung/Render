@@ -8,34 +8,34 @@
 <title>NB Remote</title>
 <style>
 * { margin: 0; padding: 0; box-sizing: border-box; }
-body, canvas, #toolbar, #status { -webkit-touch-callout: none; -webkit-user-select: none; user-select: none; }
+body, html { width: 100%; height: 100%; overflow: hidden; background: #111; color: #eee; font-family: system-ui, sans-serif; }
+body, img, #toolbar, #status { -webkit-touch-callout: none; -webkit-user-select: none; user-select: none; }
 #kb-bar input { -webkit-user-select: text; user-select: text; }
-html, body { width: 100%; height: 100%; overflow: hidden; background: #1a1a2e; color: #eee; font-family: system-ui, sans-serif; touch-action: none; }
 
-#status { position: absolute; top: 0; left: 0; right: 0; height: 24px; line-height: 24px; font-size: 12px; background: #16213e; text-align: center; z-index: 10; }
+#status { position: fixed; top: 0; left: 0; right: 0; height: 22px; line-height: 22px; font-size: 11px; background: #16213e; text-align: center; z-index: 10; }
 #status.connected { background: #0f3d0f; }
 #status.waiting { background: #3d2e0f; }
 
-#toolbar { position: absolute; bottom: 0; left: 0; right: 0; height: 32px; display: flex; gap: 4px; padding: 2px 6px; background: #16213e; justify-content: center; align-items: center; flex-wrap: nowrap; z-index: 10; overflow-x: auto; }
-#toolbar button { padding: 3px 8px; border: 1px solid #444; border-radius: 4px; background: #0f3460; color: #eee; font-size: 11px; cursor: pointer; white-space: nowrap; flex-shrink: 0; }
+#screen-wrap { position: fixed; top: 22px; left: 0; right: 0; bottom: 30px; background: #000; overflow: hidden; }
+#screen { display: block; width: 100%; height: 100%; object-fit: contain; touch-action: none; cursor: crosshair; }
+
+#toolbar { position: fixed; bottom: 0; left: 0; right: 0; height: 30px; display: flex; gap: 3px; padding: 2px 4px; background: #16213e; justify-content: center; align-items: center; z-index: 10; overflow-x: auto; }
+#toolbar button { padding: 2px 7px; border: 1px solid #444; border-radius: 4px; background: #0f3460; color: #eee; font-size: 11px; cursor: pointer; white-space: nowrap; flex-shrink: 0; }
 #toolbar button:active { background: #e94560; }
 #toolbar button.active { background: #e94560; border-color: #e94560; }
 
-#kb-bar { position: absolute; bottom: 32px; left: 0; right: 0; display: none; padding: 3px 6px; background: #0a0a1a; z-index: 10; gap: 4px; align-items: center; }
+#kb-bar { position: fixed; bottom: 30px; left: 0; right: 0; display: none; padding: 3px 6px; background: #0a0a1a; z-index: 10; gap: 4px; align-items: center; }
 #kb-bar.show { display: flex; }
 #kb-bar input { flex: 1; padding: 5px 8px; border: 1px solid #555; border-radius: 4px; background: #1a1a2e; color: #eee; font-size: 14px; outline: none; }
 #kb-bar input:focus { border-color: #e94560; }
 #kb-bar button { padding: 5px 8px; border: 1px solid #444; border-radius: 4px; background: #0f3460; color: #eee; font-size: 12px; cursor: pointer; flex-shrink: 0; }
-
-#canvas-wrap { position: absolute; top: 24px; left: 0; right: 0; bottom: 32px; display: flex; align-items: center; justify-content: center; overflow: hidden; }
-canvas { touch-action: none; cursor: crosshair; }
 </style>
 </head>
 <body>
 
 <div id="status" class="waiting">Connecting...</div>
-<div id="canvas-wrap">
-  <canvas id="screen"></canvas>
+<div id="screen-wrap">
+  <img id="screen" src="data:image/gif;base64,R0lGODlhAQABAIAAAAAAAP///yH5BAEAAAAALAAAAAABAAEAAAIBRAA7" alt="">
 </div>
 <div id="toolbar">
   <button id="btn-pause">⏸</button>
@@ -55,8 +55,7 @@ canvas { touch-action: none; cursor: crosshair; }
 </div>
 
 <script>
-const canvas = document.getElementById('screen');
-const ctx = canvas.getContext('2d');
+const screenImg = document.getElementById('screen');
 const statusEl = document.getElementById('status');
 const kbInput = document.getElementById('keyboard-input');
 
@@ -65,39 +64,37 @@ let screenW = 1920, screenH = 1080;
 let clickMode = 'left';
 let connected = false;
 let paused = false;
-let imgW = 0, imgH = 0;
 
-function fitCanvas() {
-  if (!imgW || !imgH) return;
-  const wrap = document.getElementById('canvas-wrap');
-  const maxW = wrap.clientWidth;
-  const maxH = wrap.clientHeight;
-  if (maxW <= 0 || maxH <= 0) return;
-  const scale = Math.min(maxW / imgW, maxH / imgH);
-  canvas.style.width = Math.floor(imgW * scale) + 'px';
-  canvas.style.height = Math.floor(imgH * scale) + 'px';
-  if (canvas.width !== imgW || canvas.height !== imgH) {
-    canvas.width = imgW;
-    canvas.height = imgH;
+// Convert click position on the displayed <img> to actual screen coordinates
+function imgToScreen(clientX, clientY) {
+  const rect = screenImg.getBoundingClientRect();
+  // The image is displayed with object-fit:contain, so it may have letterbox bars
+  const imgAspect = screenImg.naturalWidth / screenImg.naturalHeight;
+  const boxAspect = rect.width / rect.height;
+
+  let renderW, renderH, offsetX, offsetY;
+  if (imgAspect > boxAspect) {
+    // Image wider than box → letterbox top/bottom
+    renderW = rect.width;
+    renderH = rect.width / imgAspect;
+    offsetX = 0;
+    offsetY = (rect.height - renderH) / 2;
+  } else {
+    // Image taller than box → letterbox left/right
+    renderH = rect.height;
+    renderW = rect.height * imgAspect;
+    offsetX = (rect.width - renderW) / 2;
+    offsetY = 0;
   }
-}
 
-function renderFrame(blob) {
-  const url = URL.createObjectURL(blob);
-  const img = new Image();
-  img.onload = () => {
-    if (imgW !== img.width || imgH !== img.height) {
-      imgW = img.width;
-      imgH = img.height;
-      fitCanvas();
-    }
-    ctx.drawImage(img, 0, 0);
-    URL.revokeObjectURL(url);
+  const relX = (clientX - rect.left - offsetX) / renderW;
+  const relY = (clientY - rect.top - offsetY) / renderH;
+
+  return {
+    x: Math.max(0, Math.min(screenW, Math.round(relX * screenW))),
+    y: Math.max(0, Math.min(screenH, Math.round(relY * screenH)))
   };
-  img.src = url;
 }
-
-window.addEventListener('resize', fitCanvas);
 
 function connect() {
   const proto = location.protocol === 'https:' ? 'wss:' : 'ws:';
@@ -105,21 +102,19 @@ function connect() {
   ws.binaryType = 'arraybuffer';
 
   ws.onopen = () => {
-    statusEl.textContent = 'Connected to relay, waiting for NB...';
+    statusEl.textContent = 'Waiting for NB...';
     statusEl.className = 'waiting';
   };
 
   ws.onmessage = (ev) => {
     if (ev.data instanceof ArrayBuffer) {
-      renderFrame(new Blob([ev.data], { type: 'image/jpeg' }));
+      const blob = new Blob([ev.data], { type: 'image/jpeg' });
+      screenImg.src = URL.createObjectURL(blob);
     } else {
       try {
         const msg = JSON.parse(ev.data);
         if (msg.type === 'frame' && msg.data) {
-          const bin = atob(msg.data);
-          const arr = new Uint8Array(bin.length);
-          for (let i = 0; i < bin.length; i++) arr[i] = bin.charCodeAt(i);
-          renderFrame(new Blob([arr], { type: 'image/jpeg' }));
+          screenImg.src = 'data:image/jpeg;base64,' + msg.data;
         } else if (msg.type === 'nb_status') {
           connected = msg.connected;
           if (!paused) {
@@ -135,7 +130,7 @@ function connect() {
   };
 
   ws.onclose = () => {
-    statusEl.textContent = 'Disconnected. Reconnecting...';
+    statusEl.textContent = 'Reconnecting...';
     statusEl.className = '';
     connected = false;
     setTimeout(connect, 3000);
@@ -150,44 +145,45 @@ function send(obj) {
   }
 }
 
-function canvasToScreen(clientX, clientY) {
-  const rect = canvas.getBoundingClientRect();
-  const scaleX = canvas.width / rect.width;
-  const scaleY = canvas.height / rect.height;
-  const cx = (clientX - rect.left) * scaleX;
-  const cy = (clientY - rect.top) * scaleY;
-  const x = Math.round(cx * screenW / canvas.width);
-  const y = Math.round(cy * screenW / canvas.width * (screenH / screenW) );
-  return {
-    x: Math.max(0, Math.min(screenW, Math.round(cx * screenW / canvas.width))),
-    y: Math.max(0, Math.min(screenH, Math.round(cy * screenH / canvas.height)))
-  };
-}
-
-// Touch: tap = click (no drag)
-canvas.addEventListener('touchstart', (e) => {
+// Touch: tap = click
+screenImg.addEventListener('touchstart', (e) => {
   e.preventDefault();
   const t = e.touches[0];
-  const pos = canvasToScreen(t.clientX, t.clientY);
+  const pos = imgToScreen(t.clientX, t.clientY);
   send({ type: 'mouse_click', button: clickMode, x: pos.x, y: pos.y });
   clickMode = 'left';
 }, { passive: false });
 
 // Mouse click
-canvas.addEventListener('click', (e) => {
-  const pos = canvasToScreen(e.clientX, e.clientY);
+screenImg.addEventListener('click', (e) => {
+  const pos = imgToScreen(e.clientX, e.clientY);
   send({ type: 'mouse_click', button: clickMode, x: pos.x, y: pos.y });
   clickMode = 'left';
 });
 
-canvas.addEventListener('dblclick', (e) => {
+screenImg.addEventListener('dblclick', (e) => {
   e.preventDefault();
-  const pos = canvasToScreen(e.clientX, e.clientY);
+  const pos = imgToScreen(e.clientX, e.clientY);
   send({ type: 'mouse_dblclick', button: 'left', x: pos.x, y: pos.y });
 });
 
-// Keyboard input bar — handle both input event and keydown
+// Right-click
+screenImg.addEventListener('contextmenu', (e) => {
+  e.preventDefault();
+  const pos = imgToScreen(e.clientX, e.clientY);
+  send({ type: 'mouse_click', button: 'right', x: pos.x, y: pos.y });
+});
+
+// Mouse wheel
+screenImg.addEventListener('wheel', (e) => {
+  e.preventDefault();
+  const pos = imgToScreen(e.clientX, e.clientY);
+  send({ type: 'mouse_scroll', x: pos.x, y: pos.y, dx: e.deltaX, dy: e.deltaY });
+}, { passive: false });
+
+// Keyboard input bar
 kbInput.addEventListener('keydown', (e) => {
+  e.stopPropagation();
   const special = {
     'Backspace': 'backspace', 'Delete': 'delete', 'ArrowLeft': 'left',
     'ArrowRight': 'right', 'ArrowUp': 'up', 'ArrowDown': 'down',
@@ -199,9 +195,6 @@ kbInput.addEventListener('keydown', (e) => {
   } else if (e.key.length === 1 && !e.ctrlKey && !e.altKey && !e.metaKey) {
     e.preventDefault();
     send({ type: 'key_char', char: e.key });
-    // Show typed char briefly in input for feedback
-    kbInput.value += e.key;
-    setTimeout(() => { kbInput.value = ''; }, 300);
   }
 });
 
@@ -223,20 +216,14 @@ document.getElementById('btn-keyboard').onclick = () => {
   document.getElementById('btn-keyboard').className = kbOpen ? 'active' : '';
   if (kbOpen) setTimeout(() => kbInput.focus(), 100);
 };
-
 document.getElementById('btn-kb-close').onclick = () => {
-  kbOpen = false;
-  kbBar.className = '';
+  kbOpen = false; kbBar.className = '';
   document.getElementById('btn-keyboard').className = '';
   kbInput.blur();
 };
-
 document.getElementById('btn-send-text').onclick = () => {
   const text = kbInput.value;
-  if (text) {
-    for (const c of text) send({ type: 'key_char', char: c });
-    kbInput.value = '';
-  }
+  if (text) { for (const c of text) send({ type: 'key_char', char: c }); kbInput.value = ''; }
   kbInput.focus();
 };
 
@@ -256,7 +243,7 @@ document.getElementById('btn-enter').onclick = () => send({ type: 'key_special',
 document.getElementById('btn-bs').onclick = () => send({ type: 'key_special', key: 'backspace' });
 document.getElementById('btn-winkey').onclick = () => send({ type: 'key_special', key: 'win' });
 
-// Desktop keyboard capture
+// Desktop keyboard capture (when NOT in input box)
 document.addEventListener('keydown', (e) => {
   if (document.activeElement === kbInput) return;
   const special = {
@@ -264,8 +251,7 @@ document.addEventListener('keydown', (e) => {
     'ArrowRight': 'right', 'ArrowUp': 'up', 'ArrowDown': 'down',
     'Enter': 'enter', 'Escape': 'escape', 'Tab': 'tab',
     'Home': 'home', 'End': 'end', 'PageUp': 'pageup', 'PageDown': 'pagedown',
-    'F1': 'f1', 'F2': 'f2', 'F3': 'f3', 'F4': 'f4', 'F5': 'f5',
-    'Meta': 'win',
+    'F1': 'f1', 'F2': 'f2', 'F3': 'f3', 'F4': 'f4', 'F5': 'f5', 'Meta': 'win',
   };
   if (special[e.key]) {
     e.preventDefault();
@@ -284,24 +270,8 @@ document.addEventListener('keydown', (e) => {
   }
 });
 
-// Mouse wheel
-canvas.addEventListener('wheel', (e) => {
-  e.preventDefault();
-  const pos = canvasToScreen(e.clientX, e.clientY);
-  send({ type: 'mouse_scroll', x: pos.x, y: pos.y, dx: e.deltaX, dy: e.deltaY });
-}, { passive: false });
-
-// Right-click
-canvas.addEventListener('contextmenu', (e) => {
-  e.preventDefault();
-  const pos = canvasToScreen(e.clientX, e.clientY);
-  send({ type: 'mouse_click', button: 'right', x: pos.x, y: pos.y });
-});
-
 // Prevent mobile gestures
 document.addEventListener('touchmove', (e) => e.preventDefault(), { passive: false });
-document.addEventListener('gesturestart', (e) => e.preventDefault(), { passive: false });
-document.addEventListener('gesturechange', (e) => e.preventDefault(), { passive: false });
 
 connect();
 </script>
