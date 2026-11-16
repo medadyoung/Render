@@ -5,38 +5,34 @@
 <meta name="viewport" content="width=device-width, initial-scale=1, minimum-scale=1, maximum-scale=1, user-scalable=no, viewport-fit=cover">
 <meta name="mobile-web-app-capable" content="yes">
 <meta name="apple-mobile-web-app-capable" content="yes">
+<meta name="apple-mobile-web-app-status-bar-style" content="black-translucent">
 <title>NB Remote</title>
 <style>
-* { margin: 0; padding: 0; box-sizing: border-box; }
-body, html { width: 100%; height: 100%; overflow: hidden; background: #000; color: #eee; font-family: system-ui, sans-serif; }
-body, img, #toolbar, #status { -webkit-touch-callout: none; -webkit-user-select: none; user-select: none; }
-#kb-bar input { -webkit-user-select: text; user-select: text; }
-
-#status { position: fixed; top: 0; left: 0; right: 0; height: 22px; line-height: 22px; font-size: 11px; background: #16213e; text-align: center; z-index: 10; }
+* { margin: 0; padding: 0; box-sizing: border-box; -webkit-touch-callout: none; -webkit-user-select: none; user-select: none; }
+html { position: fixed; width: 100%; height: 100%; overflow: hidden; touch-action: none; }
+body { background: #1a1a2e; color: #eee; font-family: system-ui, sans-serif; overflow: hidden; width: 100%; height: 100%; display: flex; flex-direction: column; position: fixed; touch-action: none; }
+#status { padding: 6px 12px; font-size: 13px; background: #16213e; text-align: center; flex-shrink: 0; }
 #status.connected { background: #0f3d0f; }
 #status.waiting { background: #3d2e0f; }
-
-/* Image positioned by JS — no CSS layout dependency */
-#screen { position: fixed; touch-action: none; cursor: crosshair; }
-
-#toolbar { position: fixed; bottom: 0; left: 0; right: 0; height: 30px; display: flex; gap: 3px; padding: 2px 4px; background: #16213e; justify-content: center; align-items: center; z-index: 10; overflow-x: auto; }
-#toolbar button { padding: 2px 7px; border: 1px solid #444; border-radius: 4px; background: #0f3460; color: #eee; font-size: 11px; cursor: pointer; white-space: nowrap; flex-shrink: 0; }
+#canvas-wrap { flex: 1; display: flex; align-items: center; justify-content: center; overflow: hidden; position: relative; touch-action: none; }
+canvas { max-width: 100%; max-height: 100%; object-fit: contain; touch-action: none; cursor: crosshair; -webkit-touch-callout: none; }
+#toolbar { display: flex; gap: 4px; padding: 4px 6px; background: #16213e; flex-shrink: 0; justify-content: center; flex-wrap: nowrap; overflow-x: auto; }
+#toolbar button { padding: 4px 10px; border: 1px solid #444; border-radius: 4px; background: #0f3460; color: #eee; font-size: 12px; cursor: pointer; white-space: nowrap; flex-shrink: 0; }
 #toolbar button:active { background: #e94560; }
 #toolbar button.active { background: #e94560; border-color: #e94560; }
-
-#kb-bar { position: fixed; bottom: 30px; left: 0; right: 0; display: none; padding: 3px 6px; background: #0a0a1a; z-index: 10; gap: 4px; align-items: center; }
-#kb-bar.show { display: flex; }
-#kb-bar input { flex: 1; padding: 5px 8px; border: 1px solid #555; border-radius: 4px; background: #1a1a2e; color: #eee; font-size: 14px; outline: none; }
+#kb-bar { display: none; padding: 4px 6px; background: #0a0a1a; flex-shrink: 0; }
+#kb-bar.show { display: flex; gap: 6px; align-items: center; }
+#kb-bar input { flex: 1; padding: 8px 12px; border: 1px solid #555; border-radius: 6px; background: #1a1a2e; color: #eee; font-size: 16px; outline: none; -webkit-user-select: text; user-select: text; }
 #kb-bar input:focus { border-color: #e94560; }
-#kb-bar button { padding: 5px 8px; border: 1px solid #444; border-radius: 4px; background: #0f3460; color: #eee; font-size: 12px; cursor: pointer; flex-shrink: 0; }
-
-#debug { position: fixed; top: 24px; left: 4px; background: rgba(0,0,0,0.9); color: #0f0; font-size: 10px; padding: 4px 6px; z-index: 20; border-radius: 4px; font-family: monospace; line-height: 1.4; pointer-events: none; white-space: pre; }
+#kb-bar button { padding: 8px 12px; border: 1px solid #444; border-radius: 6px; background: #0f3460; color: #eee; font-size: 14px; cursor: pointer; flex-shrink: 0; }
 </style>
 </head>
 <body>
 
-<div id="status" class="waiting">Connecting... (v2.1)</div>
-<img id="screen" src="data:image/gif;base64,R0lGODlhAQABAIAAAAAAAP///yH5BAEAAAAALAAAAAABAAEAAAIBRAA7" alt="">
+<div id="status" class="waiting">Connecting... (v2.2)</div>
+<div id="canvas-wrap">
+  <canvas id="screen"></canvas>
+</div>
 <div id="toolbar">
   <button id="btn-pause">⏸</button>
   <button id="btn-keyboard">⌨</button>
@@ -53,61 +49,18 @@ body, img, #toolbar, #status { -webkit-touch-callout: none; -webkit-user-select:
   <button id="btn-send-text">Send</button>
   <button id="btn-kb-close">✕</button>
 </div>
-<div id="debug"></div>
 
 <script>
-const screenImg = document.getElementById('screen');
+const canvas = document.getElementById('screen');
+const ctx = canvas.getContext('2d');
 const statusEl = document.getElementById('status');
 const kbInput = document.getElementById('keyboard-input');
-const debugEl = document.getElementById('debug');
 
 let ws = null;
-let screenW = 1280, screenH = 800;
+let screenW = 1920, screenH = 1080;
 let clickMode = 'left';
 let connected = false;
 let paused = false;
-let frameCount = 0;
-
-// JS-calculated layout: position image precisely
-function layoutImage() {
-  const vw = window.innerWidth;
-  const vh = window.innerHeight;
-  const statusH = 22;
-  const toolbarH = 30;
-  const areaW = vw;
-  const areaH = vh - statusH - toolbarH;
-  const natW = screenImg.naturalWidth || 512;
-  const natH = screenImg.naturalHeight || 320;
-  const scale = Math.min(areaW / natW, areaH / natH);
-  const imgW = Math.floor(natW * scale);
-  const imgH = Math.floor(natH * scale);
-  const left = Math.floor((areaW - imgW) / 2);
-  const top = statusH + Math.floor((areaH - imgH) / 2);
-
-  screenImg.style.left = left + 'px';
-  screenImg.style.top = top + 'px';
-  screenImg.style.width = imgW + 'px';
-  screenImg.style.height = imgH + 'px';
-
-  debugEl.textContent =
-    `vp: ${vw}x${vh}  area: ${areaW}x${areaH}\n` +
-    `nat: ${natW}x${natH}  scale: ${scale.toFixed(3)}\n` +
-    `img: ${imgW}x${imgH}  pos: ${left},${top}\n` +
-    `frames: ${frameCount}`;
-}
-
-window.addEventListener('resize', layoutImage);
-screenImg.addEventListener('load', layoutImage);
-
-function imgToScreen(clientX, clientY) {
-  const rect = screenImg.getBoundingClientRect();
-  const relX = (clientX - rect.left) / rect.width;
-  const relY = (clientY - rect.top) / rect.height;
-  return {
-    x: Math.max(0, Math.min(screenW, Math.round(relX * screenW))),
-    y: Math.max(0, Math.min(screenH, Math.round(relY * screenH)))
-  };
-}
 
 function connect() {
   const proto = location.protocol === 'https:' ? 'wss:' : 'ws:';
@@ -115,28 +68,25 @@ function connect() {
   ws.binaryType = 'arraybuffer';
 
   ws.onopen = () => {
-    statusEl.textContent = 'Waiting for NB... (v2.1)';
+    statusEl.textContent = 'Waiting for NB... (v2.2)';
     statusEl.className = 'waiting';
   };
 
   ws.onmessage = (ev) => {
     if (ev.data instanceof ArrayBuffer) {
-      const blob = new Blob([ev.data], { type: 'image/jpeg' });
-      const url = URL.createObjectURL(blob);
-      screenImg.onload = () => { URL.revokeObjectURL(url); layoutImage(); };
-      screenImg.src = url;
-      frameCount++;
+      renderFrame(new Blob([ev.data], { type: 'image/jpeg' }));
     } else {
       try {
         const msg = JSON.parse(ev.data);
         if (msg.type === 'frame' && msg.data) {
-          screenImg.src = 'data:image/jpeg;base64,' + msg.data;
-          frameCount++;
-          layoutImage();
+          const bin = atob(msg.data);
+          const arr = new Uint8Array(bin.length);
+          for (let i = 0; i < bin.length; i++) arr[i] = bin.charCodeAt(i);
+          renderFrame(new Blob([arr], { type: 'image/jpeg' }));
         } else if (msg.type === 'nb_status') {
           connected = msg.connected;
           if (!paused) {
-            statusEl.textContent = connected ? '● NB Connected (v2.1)' : 'Waiting for NB... (v2.1)';
+            statusEl.textContent = connected ? '● NB Connected (v2.2)' : 'Waiting for NB... (v2.2)';
             statusEl.className = connected ? 'connected' : 'waiting';
           }
         } else if (msg.type === 'screen_info') {
@@ -146,6 +96,20 @@ function connect() {
       } catch(e) {}
     }
   };
+
+  function renderFrame(blob) {
+    const url = URL.createObjectURL(blob);
+    const img = new Image();
+    img.onload = () => {
+      if (canvas.width !== img.width || canvas.height !== img.height) {
+        canvas.width = img.width;
+        canvas.height = img.height;
+      }
+      ctx.drawImage(img, 0, 0);
+      URL.revokeObjectURL(url);
+    };
+    img.src = url;
+  }
 
   ws.onclose = () => {
     statusEl.textContent = 'Reconnecting...';
@@ -163,38 +127,39 @@ function send(obj) {
   }
 }
 
-// Touch
-screenImg.addEventListener('touchstart', (e) => {
+function canvasToScreen(clientX, clientY) {
+  const rect = canvas.getBoundingClientRect();
+  const scaleX = canvas.width / rect.width;
+  const scaleY = canvas.height / rect.height;
+  const cx = (clientX - rect.left) * scaleX;
+  const cy = (clientY - rect.top) * scaleY;
+  const x = Math.round(cx * screenW / canvas.width);
+  const y = Math.round(cy * screenH / canvas.height);
+  return { x: Math.max(0, Math.min(screenW, x)), y: Math.max(0, Math.min(screenH, y)) };
+}
+
+// Touch: tap = click
+canvas.addEventListener('touchstart', (e) => {
   e.preventDefault();
   const t = e.touches[0];
-  const pos = imgToScreen(t.clientX, t.clientY);
+  const pos = canvasToScreen(t.clientX, t.clientY);
   send({ type: 'mouse_click', button: clickMode, x: pos.x, y: pos.y });
   clickMode = 'left';
 }, { passive: false });
 
-// Mouse
-screenImg.addEventListener('click', (e) => {
-  const pos = imgToScreen(e.clientX, e.clientY);
+// Mouse click
+canvas.addEventListener('click', (e) => {
+  const pos = canvasToScreen(e.clientX, e.clientY);
   send({ type: 'mouse_click', button: clickMode, x: pos.x, y: pos.y });
   clickMode = 'left';
 });
-screenImg.addEventListener('dblclick', (e) => {
+canvas.addEventListener('dblclick', (e) => {
   e.preventDefault();
-  const pos = imgToScreen(e.clientX, e.clientY);
+  const pos = canvasToScreen(e.clientX, e.clientY);
   send({ type: 'mouse_dblclick', button: 'left', x: pos.x, y: pos.y });
 });
-screenImg.addEventListener('contextmenu', (e) => {
-  e.preventDefault();
-  const pos = imgToScreen(e.clientX, e.clientY);
-  send({ type: 'mouse_click', button: 'right', x: pos.x, y: pos.y });
-});
-screenImg.addEventListener('wheel', (e) => {
-  e.preventDefault();
-  const pos = imgToScreen(e.clientX, e.clientY);
-  send({ type: 'mouse_scroll', x: pos.x, y: pos.y, dx: e.deltaX, dy: e.deltaY });
-}, { passive: false });
 
-// Keyboard input bar
+// Keyboard input bar — keydown sends key_char directly (not relying on input event)
 kbInput.addEventListener('keydown', (e) => {
   e.stopPropagation();
   const special = {
@@ -220,7 +185,7 @@ document.getElementById('btn-pause').onclick = () => {
   const btn = document.getElementById('btn-pause');
   btn.textContent = paused ? '▶' : '⏸';
   btn.className = paused ? 'active' : '';
-  statusEl.textContent = paused ? '⏸ PAUSED' : (connected ? '● NB Connected (v2.1)' : 'Waiting for NB... (v2.1)');
+  statusEl.textContent = paused ? '⏸ PAUSED' : (connected ? '● NB Connected (v2.2)' : 'Waiting for NB... (v2.2)');
 };
 document.getElementById('btn-keyboard').onclick = () => {
   kbOpen = !kbOpen;
@@ -282,11 +247,32 @@ document.addEventListener('keydown', (e) => {
   }
 });
 
+// Mouse wheel
+canvas.addEventListener('wheel', (e) => {
+  e.preventDefault();
+  const pos = canvasToScreen(e.clientX, e.clientY);
+  send({ type: 'mouse_scroll', x: pos.x, y: pos.y, dx: e.deltaX, dy: e.deltaY });
+}, { passive: false });
+
+// Right-click
+canvas.addEventListener('contextmenu', (e) => {
+  e.preventDefault();
+  const pos = canvasToScreen(e.clientX, e.clientY);
+  send({ type: 'mouse_click', button: 'right', x: pos.x, y: pos.y });
+});
+
 // Prevent mobile gestures
 document.addEventListener('touchmove', (e) => e.preventDefault(), { passive: false });
+document.addEventListener('gesturestart', (e) => e.preventDefault(), { passive: false });
+document.addEventListener('gesturechange', (e) => e.preventDefault(), { passive: false });
+
+// Fix viewport resize when keyboard appears
+const fixedHeight = window.innerHeight;
+window.addEventListener('resize', () => {
+  document.body.style.height = fixedHeight + 'px';
+});
 
 connect();
-layoutImage();
 </script>
 </body>
 </html>
