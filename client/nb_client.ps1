@@ -1,9 +1,8 @@
 <#
 .SYNOPSIS
-  NB Remote Client — pure PowerShell/.NET
-  Connects to relay via WebSocket (auto NTLM proxy auth).
-  Captures screen → sends JPEG frames to relay.
-  Receives mouse/keyboard events from relay → replays on desktop.
+  NB Remote Client v1.1 — pure PowerShell/.NET
+  WebSocket auto-authenticates through NTLM proxy.
+  Screen capture via .NET, input replay via Win32 API.
 
 .USAGE
   Double-click start.bat, or:
@@ -16,8 +15,8 @@ param(
     [string]$Relay  = $env:NB_REMOTE_RELAY,
     [string]$Token  = $env:NB_REMOTE_TOKEN,
     [int]$FPS       = $(if ($env:NB_REMOTE_FPS)    { [int]$env:NB_REMOTE_FPS }    else { 2 }),
-    [int]$Quality   = $(if ($env:NB_REMOTE_QUALITY) { [int]$env:NB_REMOTE_QUALITY } else { 40 }),
-    [double]$Scale  = 0.5
+    [int]$Quality   = $(if ($env:NB_REMOTE_QUALITY) { [int]$env:NB_REMOTE_QUALITY } else { 35 }),
+    [double]$Scale  = 0.4
 )
 
 if (-not $Relay) { Write-Host "[nb] ERROR: -Relay or `$env:NB_REMOTE_RELAY required" -ForegroundColor Red; exit 1 }
@@ -52,7 +51,7 @@ public class NbInput {
 }
 "@
 
-# ── Screen capture (pre-cache encoder) ──
+# ── Screen capture ──
 $script:jpegEncoder = [System.Drawing.Imaging.ImageCodecInfo]::GetImageEncoders() |
     Where-Object { $_.MimeType -eq 'image/jpeg' }
 $script:jpegParams = New-Object System.Drawing.Imaging.EncoderParameters(1)
@@ -130,14 +129,19 @@ function Invoke-InputEvent($msg) {
     }
 }
 
-# ── WebSocket helpers (use .Wait() instead of .GetAwaiter().GetResult()) ──
+# ── WebSocket helpers ──
 function Send-WsText($socket, [string]$text) {
     $bytes = [System.Text.Encoding]::UTF8.GetBytes($text)
     $seg = New-Object System.ArraySegment[byte](,$bytes)
     $task = $socket.SendAsync($seg,
         [System.Net.WebSockets.WebSocketMessageType]::Text, $true,
         [System.Threading.CancellationToken]::None)
-    $task.Wait(10000) | Out-Null
+    if (-not $task.Wait(15000)) {
+        throw "Send timed out"
+    }
+    if ($task.IsFaulted) {
+        throw $task.Exception.InnerException
+    }
 }
 
 function Receive-WsText($socket, [int]$timeoutMs = 10000) {
@@ -145,6 +149,7 @@ function Receive-WsText($socket, [int]$timeoutMs = 10000) {
     $seg = New-Object System.ArraySegment[byte](,$buf)
     $task = $socket.ReceiveAsync($seg, [System.Threading.CancellationToken]::None)
     if (-not $task.Wait($timeoutMs)) { return $null }
+    if ($task.IsFaulted) { return $null }
     $r = $task.Result
     if ($r.MessageType -eq [System.Net.WebSockets.WebSocketMessageType]::Close) { return $null }
     return [System.Text.Encoding]::UTF8.GetString($buf, 0, $r.Count)
@@ -157,7 +162,7 @@ $frameMs = [int](1000 / $FPS)
 
 Write-Host ""
 Write-Host "  ======================================" -ForegroundColor Cyan
-Write-Host "       NB Remote Client (v1.0)          " -ForegroundColor Cyan
+Write-Host "       NB Remote Client (v1.1)          " -ForegroundColor Cyan
 Write-Host "  ======================================" -ForegroundColor Cyan
 Write-Host "  Relay:   $Relay"
 Write-Host "  Screen:  $($bounds.Width)x$($bounds.Height) -> $([int]($bounds.Width*$Scale))x$([int]($bounds.Height*$Scale))"
@@ -171,11 +176,11 @@ while ($true) {
         Write-Host "[nb] Connecting..." -ForegroundColor Yellow -NoNewline
 
         $socket = New-Object System.Net.WebSockets.ClientWebSocket
-        $socket.Options.KeepAliveInterval = [TimeSpan]::FromSeconds(15)
+        $socket.Options.KeepAliveInterval = [TimeSpan]::FromSeconds(10)
         $socket.Options.SetBuffer(65536, 65536)
 
         $connectTask = $socket.ConnectAsync([Uri]$wsUrl, [System.Threading.CancellationToken]::None)
-        $connectTask.Wait(15000) | Out-Null
+        if (-not $connectTask.Wait(15000)) { throw "Connect timed out" }
         if ($socket.State -ne [System.Net.WebSockets.WebSocketState]::Open) {
             throw "Connect failed (state: $($socket.State))"
         }
@@ -194,19 +199,18 @@ while ($true) {
         $infoJson = @{ type = "screen_info"; width = $bounds.Width; height = $bounds.Height } | ConvertTo-Json -Compress
         Send-WsText $socket $infoJson
 
-        # Reusable receive buffer + persistent receive task
+        # Persistent receive task
         $recvBuf = New-Object byte[] 65536
         $recvSeg = New-Object System.ArraySegment[byte](,$recvBuf)
-        $frameCount = 0
-
-        # Start a persistent receive task (never cancel it — cancelling aborts the socket)
         $recvTask = $socket.ReceiveAsync($recvSeg, [System.Threading.CancellationToken]::None)
+        $frameCount = 0
+        $errorCount = 0
 
         # ── Frame loop ──
         while ($socket.State -eq [System.Net.WebSockets.WebSocketState]::Open) {
             $sw = [System.Diagnostics.Stopwatch]::StartNew()
 
-            # 1. Capture and send frame (base64-encoded as text to survive proxy inspection)
+            # 1. Capture and send frame
             try {
                 $jpeg = Get-ScreenJpeg
                 if ($jpeg -and $jpeg.Length -gt 0) {
@@ -214,35 +218,43 @@ while ($true) {
                     $frameJson = "{`"type`":`"frame`",`"data`":`"$b64`"}"
                     Send-WsText $socket $frameJson
                     $frameCount++
-                    if ($frameCount % 30 -eq 0) {
+                    $errorCount = 0
+                    if ($frameCount % 60 -eq 0) {
                         Write-Host "[nb] Frames: $frameCount  ($([int]($jpeg.Length/1024)) KB/frame)" -ForegroundColor DarkGray
                     }
                 }
             }
             catch {
-                Write-Host "[nb] Capture error: $_" -ForegroundColor Red
-                break
+                $errorCount++
+                if ($errorCount -ge 3) {
+                    Write-Host "[nb] Send failed $errorCount times, reconnecting" -ForegroundColor Red
+                    break
+                }
+                Write-Host "[nb] Send error ($errorCount/3): $_" -ForegroundColor DarkYellow
+                Start-Sleep -Milliseconds 500
+                continue
             }
 
-            # 2. Check if receive task completed (non-blocking — never cancel!)
+            # 2. Process received events (non-blocking)
             while ($recvTask.IsCompleted -and ($socket.State -eq [System.Net.WebSockets.WebSocketState]::Open)) {
                 try {
+                    if ($recvTask.IsFaulted) {
+                        Write-Host "[nb] Receive faulted" -ForegroundColor Red
+                        break
+                    }
                     $result = $recvTask.Result
 
                     if ($result.MessageType -eq [System.Net.WebSockets.WebSocketMessageType]::Close) {
-                        Write-Host "[nb] Server closed" -ForegroundColor Yellow
+                        Write-Host "[nb] Server sent close" -ForegroundColor Yellow
                         break
                     }
                     if ($result.MessageType -eq [System.Net.WebSockets.WebSocketMessageType]::Text -and $result.Count -gt 0) {
                         $text = [System.Text.Encoding]::UTF8.GetString($recvBuf, 0, $result.Count)
                         try { Invoke-InputEvent ($text | ConvertFrom-Json) } catch { }
                     }
-
-                    # Start next receive
                     $recvTask = $socket.ReceiveAsync($recvSeg, [System.Threading.CancellationToken]::None)
                 }
                 catch {
-                    Write-Host "[nb] Receive error: $_" -ForegroundColor Red
                     break
                 }
             }
@@ -253,18 +265,16 @@ while ($true) {
             if ($sleepMs -gt 0) { Start-Sleep -Milliseconds $sleepMs }
         }
 
-        Write-Host "[nb] WebSocket closed (state: $($socket.State))" -ForegroundColor Yellow
+        Write-Host "[nb] Disconnected (state: $($socket.State), frames: $frameCount)" -ForegroundColor Yellow
 
     }
     catch {
         Write-Host "[nb] Error: $_" -ForegroundColor Red
     }
     finally {
-        if ($socket) {
-            try { $socket.Dispose() } catch { }
-        }
+        if ($socket) { try { $socket.Dispose() } catch { } }
     }
 
-    Write-Host "[nb] Reconnecting in 5s..." -ForegroundColor Yellow
-    Start-Sleep -Seconds 5
+    Write-Host "[nb] Reconnecting in 3s..." -ForegroundColor Yellow
+    Start-Sleep -Seconds 3
 }
