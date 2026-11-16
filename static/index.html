@@ -14,8 +14,8 @@ body { background: #1a1a2e; color: #eee; font-family: system-ui, sans-serif; ove
 #status { padding: 4px 8px; font-size: 12px; background: #16213e; text-align: center; flex-shrink: 0; line-height: 1.2; }
 #status.connected { background: #0f3d0f; }
 #status.waiting { background: #3d2e0f; }
-#canvas-wrap { flex: 1; min-height: 0; display: flex; align-items: center; justify-content: center; overflow: hidden; position: relative; touch-action: none; }
-canvas { display: block; max-width: 100%; max-height: 100%; object-fit: contain; touch-action: none; cursor: crosshair; -webkit-touch-callout: none; }
+#canvas-wrap { flex: 1 1 0; min-height: 0; display: flex; align-items: center; justify-content: center; overflow: hidden; position: relative; touch-action: none; }
+canvas { display: block; width: auto; height: auto; max-width: 100%; max-height: 100%; touch-action: none; cursor: crosshair; -webkit-touch-callout: none; }
 #toolbar { display: flex; gap: 4px; padding: 4px 6px; background: #16213e; flex-shrink: 0; justify-content: center; flex-wrap: wrap; }
 #toolbar button { padding: 4px 10px; border: 1px solid #444; border-radius: 5px; background: #0f3460; color: #eee; font-size: 12px; cursor: pointer; }
 #toolbar button:active { background: #e94560; }
@@ -103,19 +103,41 @@ function connect() {
     }
   };
 
+  let imgW = 0, imgH = 0;
+
+  function fitCanvas() {
+    if (!imgW || !imgH) return;
+    const wrap = document.getElementById('canvas-wrap');
+    const maxW = wrap.clientWidth;
+    const maxH = wrap.clientHeight;
+    if (maxW <= 0 || maxH <= 0) return;
+    const scale = Math.min(maxW / imgW, maxH / imgH);
+    const w = Math.floor(imgW * scale);
+    const h = Math.floor(imgH * scale);
+    canvas.style.width = w + 'px';
+    canvas.style.height = h + 'px';
+    if (canvas.width !== imgW || canvas.height !== imgH) {
+      canvas.width = imgW;
+      canvas.height = imgH;
+    }
+  }
+
   function renderFrame(blob) {
     const url = URL.createObjectURL(blob);
     const img = new Image();
     img.onload = () => {
-      if (canvas.width !== img.width || canvas.height !== img.height) {
-        canvas.width = img.width;
-        canvas.height = img.height;
+      if (imgW !== img.width || imgH !== img.height) {
+        imgW = img.width;
+        imgH = img.height;
+        fitCanvas();
       }
       ctx.drawImage(img, 0, 0);
       URL.revokeObjectURL(url);
     };
     img.src = url;
   }
+
+  window.addEventListener('resize', fitCanvas);
 
   ws.onclose = () => {
     status.textContent = 'Disconnected. Reconnecting...';
