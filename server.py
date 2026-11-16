@@ -1,5 +1,5 @@
 """
-NB-Remote Relay Server v1.1
+NB-Remote Relay Server v1.2
 Runs on Render.com (free tier). Bridges NB ↔ Phone/PC via WebSocket.
 
 Key design: non-blocking frame forwarding. If a phone client is slow,
@@ -9,6 +9,7 @@ frames are dropped rather than blocking the NB connection.
 import asyncio
 import json
 import os
+import time
 from pathlib import Path
 
 from aiohttp import web
@@ -19,6 +20,8 @@ AUTH_TOKEN = os.environ.get("NB_REMOTE_TOKEN", "change-me-to-a-secret")
 
 # Latest frame — phones grab this on their own pace
 latest_frame = None
+frame_counter = 0
+nb_connect_time = 0
 
 
 async def index(request):
@@ -27,18 +30,24 @@ async def index(request):
 
 
 async def health(request):
+    uptime = int(time.time() - nb_connect_time) if nb_ws else 0
     return web.json_response({
         "status": "ok",
         "nb_connected": nb_ws is not None,
+        "nb_uptime_s": uptime,
+        "nb_frames": frame_counter,
         "phone_clients": len(phone_clients),
     })
 
 
 async def ws_nb(request):
     """WebSocket endpoint for the NB client."""
-    global nb_ws, latest_frame
+    global nb_ws, latest_frame, frame_counter, nb_connect_time
 
-    ws = web.WebSocketResponse(max_msg_size=10 * 1024 * 1024)
+    ws = web.WebSocketResponse(
+        max_msg_size=10 * 1024 * 1024,
+        heartbeat=20.0,  # server sends ping every 20s, expects pong
+    )
     await ws.prepare(request)
 
     # Auth
@@ -61,6 +70,8 @@ async def ws_nb(request):
         except Exception:
             pass
     nb_ws = ws
+    frame_counter = 0
+    nb_connect_time = time.time()
     print("[relay] NB connected")
 
     for pc in list(phone_clients):
@@ -72,27 +83,35 @@ async def ws_nb(request):
     try:
         async for msg in ws:
             if msg.type == web.WSMsgType.TEXT:
-                # Store latest frame or forward control messages
                 try:
                     data = json.loads(msg.data)
                     if data.get("type") == "frame":
-                        # Just store it — phone clients will pick it up
                         latest_frame = msg.data
+                        frame_counter += 1
                     else:
-                        # Control messages (screen_info etc.) — forward immediately
                         for pc in list(phone_clients):
                             try:
                                 await pc.send_str(msg.data)
                             except Exception:
                                 phone_clients.discard(pc)
-                except (json.JSONDecodeError, Exception):
+                except Exception:
                     pass
             elif msg.type == web.WSMsgType.BINARY:
                 latest_frame = msg.data
+                frame_counter += 1
+            elif msg.type in (web.WSMsgType.CLOSE, web.WSMsgType.CLOSING, web.WSMsgType.CLOSED):
+                print(f"[relay] NB received close msg type={msg.type}")
+                break
+            elif msg.type == web.WSMsgType.ERROR:
+                print(f"[relay] NB ws error: {ws.exception()}")
+                break
+    except Exception as e:
+        print(f"[relay] NB handler exception: {e}")
     finally:
+        elapsed = int(time.time() - nb_connect_time)
+        print(f"[relay] NB disconnected after {elapsed}s, {frame_counter} frames")
         nb_ws = None
         latest_frame = None
-        print("[relay] NB disconnected")
         for pc in list(phone_clients):
             try:
                 await pc.send_json({"type": "nb_status", "connected": False})
@@ -106,14 +125,12 @@ async def ws_phone(request):
     """WebSocket endpoint for phone/PC browsers."""
     global nb_ws, latest_frame
 
-    ws = web.WebSocketResponse()
+    ws = web.WebSocketResponse(heartbeat=20.0)
     await ws.prepare(request)
     phone_clients.add(ws)
     print(f"[relay] Browser connected (total: {len(phone_clients)})")
 
     await ws.send_json({"type": "nb_status", "connected": nb_ws is not None})
-
-    # Two tasks: push frames to phone + receive input from phone
 
     async def push_frames():
         """Send latest frame to this phone client at its own pace."""
@@ -129,17 +146,23 @@ async def ws_phone(request):
                     last_sent = frame
                 except Exception:
                     break
-            await asyncio.sleep(0.3)  # ~3 FPS max to phone
+            await asyncio.sleep(0.3)
 
     async def recv_input():
         """Receive mouse/keyboard events from phone → forward to NB."""
-        async for msg in ws:
-            if msg.type == web.WSMsgType.TEXT:
-                if nb_ws is not None:
-                    try:
-                        await nb_ws.send_str(msg.data)
-                    except Exception:
-                        pass
+        try:
+            async for msg in ws:
+                if msg.type == web.WSMsgType.TEXT:
+                    if nb_ws is not None:
+                        try:
+                            await nb_ws.send_str(msg.data)
+                        except Exception:
+                            pass
+                elif msg.type in (web.WSMsgType.CLOSE, web.WSMsgType.CLOSING,
+                                  web.WSMsgType.CLOSED, web.WSMsgType.ERROR):
+                    break
+        except Exception:
+            pass
 
     try:
         await asyncio.gather(push_frames(), recv_input())

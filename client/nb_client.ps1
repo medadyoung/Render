@@ -162,7 +162,7 @@ $frameMs = [int](1000 / $FPS)
 
 Write-Host ""
 Write-Host "  ======================================" -ForegroundColor Cyan
-Write-Host "       NB Remote Client (v1.1)          " -ForegroundColor Cyan
+Write-Host "       NB Remote Client (v1.2)          " -ForegroundColor Cyan
 Write-Host "  ======================================" -ForegroundColor Cyan
 Write-Host "  Relay:   $Relay"
 Write-Host "  Screen:  $($bounds.Width)x$($bounds.Height) -> $([int]($bounds.Width*$Scale))x$([int]($bounds.Height*$Scale))"
@@ -206,6 +206,8 @@ while ($true) {
         $frameCount = 0
         $errorCount = 0
 
+        $startTime = [DateTime]::Now
+
         # ── Frame loop ──
         while ($socket.State -eq [System.Net.WebSockets.WebSocketState]::Open) {
             $sw = [System.Diagnostics.Stopwatch]::StartNew()
@@ -220,7 +222,8 @@ while ($true) {
                     $frameCount++
                     $errorCount = 0
                     if ($frameCount % 60 -eq 0) {
-                        Write-Host "[nb] Frames: $frameCount  ($([int]($jpeg.Length/1024)) KB/frame)" -ForegroundColor DarkGray
+                        $uptime = [int](([DateTime]::Now - $startTime).TotalSeconds)
+                        Write-Host "[nb] Frames: $frameCount  ($([int]($jpeg.Length/1024)) KB/frame, uptime ${uptime}s)" -ForegroundColor DarkGray
                     }
                 }
             }
@@ -239,7 +242,7 @@ while ($true) {
             while ($recvTask.IsCompleted -and ($socket.State -eq [System.Net.WebSockets.WebSocketState]::Open)) {
                 try {
                     if ($recvTask.IsFaulted) {
-                        Write-Host "[nb] Receive faulted" -ForegroundColor Red
+                        Write-Host "[nb] Receive faulted: $($recvTask.Exception.InnerException.Message)" -ForegroundColor Red
                         break
                     }
                     $result = $recvTask.Result
@@ -265,7 +268,8 @@ while ($true) {
             if ($sleepMs -gt 0) { Start-Sleep -Milliseconds $sleepMs }
         }
 
-        Write-Host "[nb] Disconnected (state: $($socket.State), frames: $frameCount)" -ForegroundColor Yellow
+        $uptime = [int](([DateTime]::Now - $startTime).TotalSeconds)
+        Write-Host "[nb] Disconnected (state: $($socket.State), frames: $frameCount, uptime: ${uptime}s)" -ForegroundColor Yellow
 
     }
     catch {
