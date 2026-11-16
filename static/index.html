@@ -236,6 +236,46 @@ document.getElementById('btn-enter').onclick = () => send({ type: 'key_special',
 document.getElementById('btn-bs').onclick = () => send({ type: 'key_special', key: 'backspace' });
 document.getElementById('btn-winkey').onclick = () => send({ type: 'key_special', key: 'win' });
 
+// Desktop keyboard: capture keystrokes when canvas is focused
+document.addEventListener('keydown', (e) => {
+  // Don't capture if typing in the keyboard input bar
+  if (document.activeElement === kbInput) return;
+
+  const special = {
+    'Backspace': 'backspace', 'Delete': 'delete', 'ArrowLeft': 'left',
+    'ArrowRight': 'right', 'ArrowUp': 'up', 'ArrowDown': 'down',
+    'Enter': 'enter', 'Escape': 'escape', 'Tab': 'tab',
+    'Home': 'home', 'End': 'end', 'PageUp': 'pageup', 'PageDown': 'pagedown',
+    'F1': 'f1', 'F2': 'f2', 'F3': 'f3', 'F4': 'f4', 'F5': 'f5',
+    'Meta': 'win',
+  };
+
+  if (special[e.key]) {
+    e.preventDefault();
+    send({ type: 'key_special', key: special[e.key] });
+  } else if (e.ctrlKey || e.altKey || e.metaKey) {
+    // Combo keys: Ctrl+C, Ctrl+V, Alt+Tab, etc.
+    e.preventDefault();
+    const mods = [];
+    if (e.ctrlKey) mods.push('ctrl');
+    if (e.altKey) mods.push('alt');
+    if (e.shiftKey) mods.push('shift');
+    mods.push(e.key.toLowerCase());
+    send({ type: 'key_combo', keys: mods });
+  } else if (e.key.length === 1) {
+    e.preventDefault();
+    send({ type: 'key_char', char: e.key });
+  }
+});
+
+// Right-click on canvas → send right click instead of context menu
+canvas.addEventListener('contextmenu', (e) => {
+  e.preventDefault();
+  const pos = canvasToScreen(e.clientX, e.clientY);
+  send({ type: 'mouse_move', x: pos.x, y: pos.y });
+  send({ type: 'mouse_click', button: 'right', x: pos.x, y: pos.y });
+});
+
 // Start
 connect();
 </script>
