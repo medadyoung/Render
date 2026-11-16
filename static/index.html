@@ -68,24 +68,19 @@ function connect() {
 
   ws.onmessage = (ev) => {
     if (ev.data instanceof ArrayBuffer) {
-      // Screenshot frame (JPEG bytes)
-      const blob = new Blob([ev.data], { type: 'image/jpeg' });
-      const url = URL.createObjectURL(blob);
-      const img = new Image();
-      img.onload = () => {
-        if (canvas.width !== img.width || canvas.height !== img.height) {
-          canvas.width = img.width;
-          canvas.height = img.height;
-        }
-        ctx.drawImage(img, 0, 0);
-        URL.revokeObjectURL(url);
-      };
-      img.src = url;
+      // Screenshot frame (binary JPEG bytes)
+      renderFrame(new Blob([ev.data], { type: 'image/jpeg' }));
     } else {
-      // JSON message
+      // Text message — could be JSON control or base64 frame
       try {
         const msg = JSON.parse(ev.data);
-        if (msg.type === 'nb_status') {
+        if (msg.type === 'frame' && msg.data) {
+          // Base64-encoded JPEG frame
+          const bin = atob(msg.data);
+          const arr = new Uint8Array(bin.length);
+          for (let i = 0; i < bin.length; i++) arr[i] = bin.charCodeAt(i);
+          renderFrame(new Blob([arr], { type: 'image/jpeg' }));
+        } else if (msg.type === 'nb_status') {
           connected = msg.connected;
           if (connected) {
             status.textContent = '● NB Connected — tap to control';
@@ -101,6 +96,20 @@ function connect() {
       } catch(e) {}
     }
   };
+
+  function renderFrame(blob) {
+    const url = URL.createObjectURL(blob);
+    const img = new Image();
+    img.onload = () => {
+      if (canvas.width !== img.width || canvas.height !== img.height) {
+        canvas.width = img.width;
+        canvas.height = img.height;
+      }
+      ctx.drawImage(img, 0, 0);
+      URL.revokeObjectURL(url);
+    };
+    img.src = url;
+  }
 
   ws.onclose = () => {
     status.textContent = 'Disconnected. Reconnecting...';

@@ -70,14 +70,15 @@ async def ws_nb(request):
     try:
         async for msg in ws:
             if msg.type == web.WSMsgType.BINARY:
-                # Screenshot frame from NB → broadcast to all phone clients
+                # Screenshot frame from NB (binary) → broadcast to phone clients
                 for pc in list(phone_clients):
                     try:
                         await pc.send_bytes(msg.data)
                     except Exception:
                         phone_clients.discard(pc)
             elif msg.type == web.WSMsgType.TEXT:
-                # JSON messages (e.g. screen size info)
+                # Could be a base64 frame or a JSON control message
+                # Forward as-is to all phone clients — browser will decode
                 for pc in list(phone_clients):
                     try:
                         await pc.send_str(msg.data)
