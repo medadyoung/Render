@@ -11,20 +11,20 @@
 * { margin: 0; padding: 0; box-sizing: border-box; -webkit-touch-callout: none; -webkit-user-select: none; user-select: none; }
 html { position: fixed; width: 100%; height: 100%; overflow: hidden; touch-action: none; }
 body { background: #1a1a2e; color: #eee; font-family: system-ui, sans-serif; overflow: hidden; width: 100%; height: 100%; display: flex; flex-direction: column; position: fixed; touch-action: none; }
-#status { padding: 6px 12px; font-size: 13px; background: #16213e; text-align: center; flex-shrink: 0; }
+#status { padding: 4px 8px; font-size: 12px; background: #16213e; text-align: center; flex-shrink: 0; line-height: 1.2; }
 #status.connected { background: #0f3d0f; }
 #status.waiting { background: #3d2e0f; }
-#canvas-wrap { flex: 1; display: flex; align-items: center; justify-content: center; overflow: hidden; position: relative; touch-action: none; }
-canvas { max-width: 100%; max-height: 100%; object-fit: contain; touch-action: none; cursor: crosshair; -webkit-touch-callout: none; }
-#toolbar { display: flex; gap: 8px; padding: 6px; background: #16213e; flex-shrink: 0; justify-content: center; flex-wrap: wrap; }
-#toolbar button { padding: 6px 14px; border: 1px solid #444; border-radius: 6px; background: #0f3460; color: #eee; font-size: 13px; cursor: pointer; }
+#canvas-wrap { flex: 1; min-height: 0; display: flex; align-items: center; justify-content: center; overflow: hidden; position: relative; touch-action: none; }
+canvas { display: block; max-width: 100%; max-height: 100%; object-fit: contain; touch-action: none; cursor: crosshair; -webkit-touch-callout: none; }
+#toolbar { display: flex; gap: 4px; padding: 4px 6px; background: #16213e; flex-shrink: 0; justify-content: center; flex-wrap: wrap; }
+#toolbar button { padding: 4px 10px; border: 1px solid #444; border-radius: 5px; background: #0f3460; color: #eee; font-size: 12px; cursor: pointer; }
 #toolbar button:active { background: #e94560; }
 #toolbar button.active { background: #e94560; border-color: #e94560; }
-#kb-bar { display: none; padding: 4px 6px; background: #0a0a1a; flex-shrink: 0; }
-#kb-bar.show { display: flex; gap: 6px; align-items: center; }
-#kb-bar input { flex: 1; padding: 8px 12px; border: 1px solid #555; border-radius: 6px; background: #1a1a2e; color: #eee; font-size: 16px; outline: none; }
+#kb-bar { display: none; padding: 3px 6px; background: #0a0a1a; flex-shrink: 0; }
+#kb-bar.show { display: flex; gap: 4px; align-items: center; }
+#kb-bar input { flex: 1; padding: 6px 10px; border: 1px solid #555; border-radius: 5px; background: #1a1a2e; color: #eee; font-size: 15px; outline: none; }
 #kb-bar input:focus { border-color: #e94560; }
-#kb-bar button { padding: 8px 12px; border: 1px solid #444; border-radius: 6px; background: #0f3460; color: #eee; font-size: 14px; cursor: pointer; flex-shrink: 0; }
+#kb-bar button { padding: 6px 10px; border: 1px solid #444; border-radius: 5px; background: #0f3460; color: #eee; font-size: 13px; cursor: pointer; flex-shrink: 0; }
 </style>
 </head>
 <body>
