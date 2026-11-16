@@ -1,36 +1,32 @@
 """
-NB-Remote Relay Server
-Runs on Render (free tier). Bridges NB ↔ Phone via WebSocket.
+NB-Remote Relay Server v1.1
+Runs on Render.com (free tier). Bridges NB ↔ Phone/PC via WebSocket.
 
-Architecture:
-  Phone (Chrome) ──WSS──▶ This server ◀──WSS── NB (Python client)
-  
-The NB client captures screenshots and sends them here.
-The phone browser displays them and sends back mouse/keyboard events.
+Key design: non-blocking frame forwarding. If a phone client is slow,
+frames are dropped rather than blocking the NB connection.
 """
 
 import asyncio
 import json
 import os
-import secrets
 from pathlib import Path
 
 from aiohttp import web
 
-# Shared state
-nb_ws = None          # WebSocket connection from NB client
-phone_clients = set() # WebSocket connections from phone browsers
+nb_ws = None
+phone_clients = set()
 AUTH_TOKEN = os.environ.get("NB_REMOTE_TOKEN", "change-me-to-a-secret")
+
+# Latest frame — phones grab this on their own pace
+latest_frame = None
 
 
 async def index(request):
-    """Serve the phone UI."""
     html = (Path(__file__).parent / "static" / "index.html").read_text()
     return web.Response(text=html, content_type="text/html")
 
 
 async def health(request):
-    """Health check for Render."""
     return web.json_response({
         "status": "ok",
         "nb_connected": nb_ws is not None,
@@ -40,12 +36,12 @@ async def health(request):
 
 async def ws_nb(request):
     """WebSocket endpoint for the NB client."""
-    global nb_ws
+    global nb_ws, latest_frame
 
-    ws = web.WebSocketResponse(max_msg_size=10 * 1024 * 1024)  # 10MB for screenshots
+    ws = web.WebSocketResponse(max_msg_size=10 * 1024 * 1024)
     await ws.prepare(request)
 
-    # Auth check
+    # Auth
     try:
         msg = await asyncio.wait_for(ws.receive_json(), timeout=10)
         if msg.get("type") != "auth" or msg.get("token") != AUTH_TOKEN:
@@ -57,10 +53,16 @@ async def ws_nb(request):
         return ws
 
     await ws.send_json({"type": "auth_ok"})
+
+    # Close previous NB connection if exists
+    if nb_ws is not None:
+        try:
+            await nb_ws.close()
+        except Exception:
+            pass
     nb_ws = ws
     print("[relay] NB connected")
 
-    # Notify phone clients
     for pc in list(phone_clients):
         try:
             await pc.send_json({"type": "nb_status", "connected": True})
@@ -69,23 +71,27 @@ async def ws_nb(request):
 
     try:
         async for msg in ws:
-            if msg.type == web.WSMsgType.BINARY:
-                # Screenshot frame from NB (binary) → broadcast to phone clients
-                for pc in list(phone_clients):
-                    try:
-                        await pc.send_bytes(msg.data)
-                    except Exception:
-                        phone_clients.discard(pc)
-            elif msg.type == web.WSMsgType.TEXT:
-                # Could be a base64 frame or a JSON control message
-                # Forward as-is to all phone clients — browser will decode
-                for pc in list(phone_clients):
-                    try:
-                        await pc.send_str(msg.data)
-                    except Exception:
-                        phone_clients.discard(pc)
+            if msg.type == web.WSMsgType.TEXT:
+                # Store latest frame or forward control messages
+                try:
+                    data = json.loads(msg.data)
+                    if data.get("type") == "frame":
+                        # Just store it — phone clients will pick it up
+                        latest_frame = msg.data
+                    else:
+                        # Control messages (screen_info etc.) — forward immediately
+                        for pc in list(phone_clients):
+                            try:
+                                await pc.send_str(msg.data)
+                            except Exception:
+                                phone_clients.discard(pc)
+                except (json.JSONDecodeError, Exception):
+                    pass
+            elif msg.type == web.WSMsgType.BINARY:
+                latest_frame = msg.data
     finally:
         nb_ws = None
+        latest_frame = None
         print("[relay] NB disconnected")
         for pc in list(phone_clients):
             try:
@@ -97,29 +103,51 @@ async def ws_nb(request):
 
 
 async def ws_phone(request):
-    """WebSocket endpoint for phone browsers."""
-    global nb_ws
+    """WebSocket endpoint for phone/PC browsers."""
+    global nb_ws, latest_frame
 
     ws = web.WebSocketResponse()
     await ws.prepare(request)
     phone_clients.add(ws)
-    print(f"[relay] Phone connected (total: {len(phone_clients)})")
+    print(f"[relay] Browser connected (total: {len(phone_clients)})")
 
-    # Tell phone whether NB is connected
     await ws.send_json({"type": "nb_status", "connected": nb_ws is not None})
 
-    try:
+    # Two tasks: push frames to phone + receive input from phone
+
+    async def push_frames():
+        """Send latest frame to this phone client at its own pace."""
+        last_sent = None
+        while not ws.closed:
+            frame = latest_frame
+            if frame is not None and frame is not last_sent:
+                try:
+                    if isinstance(frame, bytes):
+                        await ws.send_bytes(frame)
+                    else:
+                        await ws.send_str(frame)
+                    last_sent = frame
+                except Exception:
+                    break
+            await asyncio.sleep(0.3)  # ~3 FPS max to phone
+
+    async def recv_input():
+        """Receive mouse/keyboard events from phone → forward to NB."""
         async for msg in ws:
             if msg.type == web.WSMsgType.TEXT:
-                # Mouse/keyboard events from phone → forward to NB
                 if nb_ws is not None:
                     try:
                         await nb_ws.send_str(msg.data)
                     except Exception:
                         pass
+
+    try:
+        await asyncio.gather(push_frames(), recv_input())
+    except Exception:
+        pass
     finally:
         phone_clients.discard(ws)
-        print(f"[relay] Phone disconnected (total: {len(phone_clients)})")
+        print(f"[relay] Browser disconnected (total: {len(phone_clients)})")
 
     return ws
 

@@ -7,7 +7,9 @@
 <meta name="apple-mobile-web-app-capable" content="yes">
 <title>NB Remote</title>
 <style>
-* { margin: 0; padding: 0; box-sizing: border-box; -webkit-touch-callout: none; -webkit-user-select: none; user-select: none; }
+* { margin: 0; padding: 0; box-sizing: border-box; }
+body, canvas, #toolbar, #status { -webkit-touch-callout: none; -webkit-user-select: none; user-select: none; }
+#kb-bar input { -webkit-user-select: text; user-select: text; }
 html, body { width: 100%; height: 100%; overflow: hidden; background: #1a1a2e; color: #eee; font-family: system-ui, sans-serif; touch-action: none; }
 
 #status { position: absolute; top: 0; left: 0; right: 0; height: 24px; line-height: 24px; font-size: 12px; background: #16213e; text-align: center; z-index: 10; }
@@ -184,15 +186,7 @@ canvas.addEventListener('dblclick', (e) => {
   send({ type: 'mouse_dblclick', button: 'left', x: pos.x, y: pos.y });
 });
 
-// Keyboard input bar
-kbInput.addEventListener('input', () => {
-  const ch = kbInput.value;
-  if (ch) {
-    for (const c of ch) send({ type: 'key_char', char: c });
-    kbInput.value = '';
-  }
-});
-
+// Keyboard input bar — handle both input event and keydown
 kbInput.addEventListener('keydown', (e) => {
   const special = {
     'Backspace': 'backspace', 'Delete': 'delete', 'ArrowLeft': 'left',
@@ -202,6 +196,12 @@ kbInput.addEventListener('keydown', (e) => {
   if (special[e.key]) {
     e.preventDefault();
     send({ type: 'key_special', key: special[e.key] });
+  } else if (e.key.length === 1 && !e.ctrlKey && !e.altKey && !e.metaKey) {
+    e.preventDefault();
+    send({ type: 'key_char', char: e.key });
+    // Show typed char briefly in input for feedback
+    kbInput.value += e.key;
+    setTimeout(() => { kbInput.value = ''; }, 300);
   }
 });
 
