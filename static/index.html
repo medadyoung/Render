@@ -34,6 +34,7 @@ canvas { max-width: 100%; max-height: 100%; object-fit: contain; touch-action: n
   <canvas id="screen"></canvas>
 </div>
 <div id="toolbar">
+  <button id="btn-pause">⏸ Pause</button>
   <button id="btn-keyboard">⌨ KB</button>
   <button id="btn-click">🖱 Click</button>
   <button id="btn-rclick">🖱 Right</button>
@@ -59,6 +60,7 @@ let ws = null;
 let screenW = 1920, screenH = 1080;
 let clickMode = 'left'; // 'left' or 'right'
 let connected = false;
+let paused = false;
 
 function connect() {
   const proto = location.protocol === 'https:' ? 'wss:' : 'ws:';
@@ -126,6 +128,7 @@ function connect() {
 }
 
 function send(obj) {
+  if (paused) return; // Don't send input when paused
   if (ws && ws.readyState === WebSocket.OPEN) {
     ws.send(JSON.stringify(obj));
   }
@@ -145,21 +148,13 @@ function canvasToScreen(clientX, clientY) {
   return { x: Math.max(0, Math.min(screenW, x)), y: Math.max(0, Math.min(screenH, y)) };
 }
 
-// Touch events for mobile
+// Touch events for mobile — only click on tap, no continuous mouse_move
 canvas.addEventListener('touchstart', (e) => {
   e.preventDefault();
   const t = e.touches[0];
   const pos = canvasToScreen(t.clientX, t.clientY);
-  send({ type: 'mouse_move', x: pos.x, y: pos.y });
   send({ type: 'mouse_click', button: clickMode, x: pos.x, y: pos.y });
-  clickMode = 'left'; // reset after right-click
-}, { passive: false });
-
-canvas.addEventListener('touchmove', (e) => {
-  e.preventDefault();
-  const t = e.touches[0];
-  const pos = canvasToScreen(t.clientX, t.clientY);
-  send({ type: 'mouse_move', x: pos.x, y: pos.y });
+  clickMode = 'left';
 }, { passive: false });
 
 // Mouse events (for testing on desktop)
@@ -230,6 +225,17 @@ document.getElementById('btn-send-text').onclick = () => {
     kbInput.value = '';
   }
   kbInput.focus();
+};
+
+// Pause button
+document.getElementById('btn-pause').onclick = () => {
+  paused = !paused;
+  const btn = document.getElementById('btn-pause');
+  btn.textContent = paused ? '▶ Resume' : '⏸ Pause';
+  btn.className = paused ? 'active' : '';
+  status.textContent = paused
+    ? '⏸ PAUSED — NB has local control'
+    : (connected ? '● NB Connected — tap to control' : 'NB disconnected — waiting...');
 };
 
 // Toolbar buttons
