@@ -130,37 +130,24 @@ function Invoke-InputEvent($msg) {
     }
 }
 
-# ── WebSocket helpers ──
-function Send-WsBytes($socket, [byte[]]$data, [string]$msgType) {
-    $seg = New-Object System.ArraySegment[byte](,$data)
-    if ($msgType -eq "Text") {
-        $mt = [System.Net.WebSockets.WebSocketMessageType]::Text
-    } else {
-        $mt = [System.Net.WebSockets.WebSocketMessageType]::Binary
-    }
-    $socket.SendAsync($seg, $mt, $true,
-        [System.Threading.CancellationToken]::None).GetAwaiter().GetResult() | Out-Null
-}
-
+# ── WebSocket helpers (use .Wait() instead of .GetAwaiter().GetResult()) ──
 function Send-WsText($socket, [string]$text) {
-    Send-WsBytes $socket ([System.Text.Encoding]::UTF8.GetBytes($text)) "Text"
+    $bytes = [System.Text.Encoding]::UTF8.GetBytes($text)
+    $seg = New-Object System.ArraySegment[byte](,$bytes)
+    $task = $socket.SendAsync($seg,
+        [System.Net.WebSockets.WebSocketMessageType]::Text, $true,
+        [System.Threading.CancellationToken]::None)
+    $task.Wait(10000) | Out-Null
 }
 
 function Receive-WsText($socket, [int]$timeoutMs = 10000) {
     $buf = New-Object byte[] 65536
     $seg = New-Object System.ArraySegment[byte](,$buf)
-    $cts = New-Object System.Threading.CancellationTokenSource($timeoutMs)
-    try {
-        $r = $socket.ReceiveAsync($seg, $cts.Token).GetAwaiter().GetResult()
-        if ($r.MessageType -eq [System.Net.WebSockets.WebSocketMessageType]::Close) { return $null }
-        return [System.Text.Encoding]::UTF8.GetString($buf, 0, $r.Count)
-    }
-    catch {
-        return $null
-    }
-    finally {
-        $cts.Dispose()
-    }
+    $task = $socket.ReceiveAsync($seg, [System.Threading.CancellationToken]::None)
+    if (-not $task.Wait($timeoutMs)) { return $null }
+    $r = $task.Result
+    if ($r.MessageType -eq [System.Net.WebSockets.WebSocketMessageType]::Close) { return $null }
+    return [System.Text.Encoding]::UTF8.GetString($buf, 0, $r.Count)
 }
 
 # ── Main ──
@@ -185,9 +172,13 @@ while ($true) {
 
         $socket = New-Object System.Net.WebSockets.ClientWebSocket
         $socket.Options.KeepAliveInterval = [TimeSpan]::FromSeconds(15)
+        $socket.Options.SetBuffer(65536, 65536)
 
-        $socket.ConnectAsync([Uri]$wsUrl,
-            [System.Threading.CancellationToken]::None).GetAwaiter().GetResult()
+        $connectTask = $socket.ConnectAsync([Uri]$wsUrl, [System.Threading.CancellationToken]::None)
+        $connectTask.Wait(15000) | Out-Null
+        if ($socket.State -ne [System.Net.WebSockets.WebSocketState]::Open) {
+            throw "Connect failed (state: $($socket.State))"
+        }
         Write-Host " OK" -ForegroundColor Green
 
         # Auth
@@ -203,10 +194,13 @@ while ($true) {
         $infoJson = @{ type = "screen_info"; width = $bounds.Width; height = $bounds.Height } | ConvertTo-Json -Compress
         Send-WsText $socket $infoJson
 
-        # Reusable receive buffer
+        # Reusable receive buffer + persistent receive task
         $recvBuf = New-Object byte[] 65536
         $recvSeg = New-Object System.ArraySegment[byte](,$recvBuf)
         $frameCount = 0
+
+        # Start a persistent receive task (never cancel it — cancelling aborts the socket)
+        $recvTask = $socket.ReceiveAsync($recvSeg, [System.Threading.CancellationToken]::None)
 
         # ── Frame loop ──
         while ($socket.State -eq [System.Net.WebSockets.WebSocketState]::Open) {
@@ -227,31 +221,29 @@ while ($true) {
             }
             catch {
                 Write-Host "[nb] Capture error: $_" -ForegroundColor Red
+                break
             }
 
-            # 2. Drain pending input events (non-blocking, 30ms timeout per attempt)
-            $keepDraining = $true
-            while ($keepDraining -and ($socket.State -eq [System.Net.WebSockets.WebSocketState]::Open)) {
-                $cts = $null
+            # 2. Check if receive task completed (non-blocking — never cancel!)
+            while ($recvTask.IsCompleted -and ($socket.State -eq [System.Net.WebSockets.WebSocketState]::Open)) {
                 try {
-                    $cts = New-Object System.Threading.CancellationTokenSource(30)
-                    $result = $socket.ReceiveAsync($recvSeg, $cts.Token).GetAwaiter().GetResult()
+                    $result = $recvTask.Result
 
                     if ($result.MessageType -eq [System.Net.WebSockets.WebSocketMessageType]::Close) {
                         Write-Host "[nb] Server closed" -ForegroundColor Yellow
-                        $keepDraining = $false
+                        break
                     }
-                    elseif ($result.MessageType -eq [System.Net.WebSockets.WebSocketMessageType]::Text -and $result.Count -gt 0) {
+                    if ($result.MessageType -eq [System.Net.WebSockets.WebSocketMessageType]::Text -and $result.Count -gt 0) {
                         $text = [System.Text.Encoding]::UTF8.GetString($recvBuf, 0, $result.Count)
                         try { Invoke-InputEvent ($text | ConvertFrom-Json) } catch { }
                     }
+
+                    # Start next receive
+                    $recvTask = $socket.ReceiveAsync($recvSeg, [System.Threading.CancellationToken]::None)
                 }
                 catch {
-                    # Timeout (TaskCanceledException) or any recv error → stop draining
-                    $keepDraining = $false
-                }
-                finally {
-                    if ($cts) { $cts.Dispose() }
+                    Write-Host "[nb] Receive error: $_" -ForegroundColor Red
+                    break
                 }
             }
 
