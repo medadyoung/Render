@@ -15,7 +15,12 @@ canvas { max-width: 100%; max-height: 100%; object-fit: contain; touch-action: n
 #toolbar { display: flex; gap: 8px; padding: 6px; background: #16213e; flex-shrink: 0; justify-content: center; flex-wrap: wrap; }
 #toolbar button { padding: 6px 14px; border: 1px solid #444; border-radius: 6px; background: #0f3460; color: #eee; font-size: 13px; cursor: pointer; }
 #toolbar button:active { background: #e94560; }
-#keyboard-input { position: absolute; left: -9999px; opacity: 0; }
+#toolbar button.active { background: #e94560; border-color: #e94560; }
+#kb-bar { display: none; padding: 4px 6px; background: #0a0a1a; flex-shrink: 0; }
+#kb-bar.show { display: flex; gap: 6px; align-items: center; }
+#kb-bar input { flex: 1; padding: 8px 12px; border: 1px solid #555; border-radius: 6px; background: #1a1a2e; color: #eee; font-size: 16px; outline: none; }
+#kb-bar input:focus { border-color: #e94560; }
+#kb-bar button { padding: 8px 12px; border: 1px solid #444; border-radius: 6px; background: #0f3460; color: #eee; font-size: 14px; cursor: pointer; flex-shrink: 0; }
 </style>
 </head>
 <body>
@@ -25,15 +30,20 @@ canvas { max-width: 100%; max-height: 100%; object-fit: contain; touch-action: n
   <canvas id="screen"></canvas>
 </div>
 <div id="toolbar">
-  <button id="btn-keyboard">⌨ Keyboard</button>
+  <button id="btn-keyboard">⌨ KB</button>
   <button id="btn-click">🖱 Click</button>
   <button id="btn-rclick">🖱 Right</button>
   <button id="btn-esc">Esc</button>
   <button id="btn-tab">Tab</button>
-  <button id="btn-enter">Enter</button>
-  <button id="btn-winkey">⊞ Win</button>
+  <button id="btn-enter">⏎</button>
+  <button id="btn-bs">⌫</button>
+  <button id="btn-winkey">⊞</button>
 </div>
-<input id="keyboard-input" type="text" autocapitalize="off" autocomplete="off" autocorrect="off">
+<div id="kb-bar">
+  <input id="keyboard-input" type="text" placeholder="Type here..." autocapitalize="off" autocomplete="off" autocorrect="off" spellcheck="false">
+  <button id="btn-send-text">Send</button>
+  <button id="btn-kb-close">✕</button>
+</div>
 
 <script>
 const canvas = document.getElementById('screen');
@@ -178,15 +188,52 @@ kbInput.addEventListener('keydown', (e) => {
   }
 });
 
-// Toolbar buttons
+// Keyboard bar toggle
+const kbBar = document.getElementById('kb-bar');
+let kbOpen = false;
+
 document.getElementById('btn-keyboard').onclick = () => {
+  kbOpen = !kbOpen;
+  kbBar.className = kbOpen ? 'show' : '';
+  document.getElementById('btn-keyboard').className = kbOpen ? 'active' : '';
+  if (kbOpen) {
+    setTimeout(() => kbInput.focus(), 100);
+  }
+};
+
+document.getElementById('btn-kb-close').onclick = () => {
+  kbOpen = false;
+  kbBar.className = '';
+  document.getElementById('btn-keyboard').className = '';
+  kbInput.blur();
+};
+
+document.getElementById('btn-send-text').onclick = () => {
+  const text = kbInput.value;
+  if (text) {
+    for (const c of text) {
+      send({ type: 'key_char', char: c });
+    }
+    kbInput.value = '';
+  }
   kbInput.focus();
 };
-document.getElementById('btn-click').onclick = () => { clickMode = 'left'; };
-document.getElementById('btn-rclick').onclick = () => { clickMode = 'right'; };
+
+// Toolbar buttons
+document.getElementById('btn-click').onclick = () => {
+  document.getElementById('btn-click').className = 'active';
+  document.getElementById('btn-rclick').className = '';
+  clickMode = 'left';
+};
+document.getElementById('btn-rclick').onclick = () => {
+  document.getElementById('btn-rclick').className = 'active';
+  document.getElementById('btn-click').className = '';
+  clickMode = 'right';
+};
 document.getElementById('btn-esc').onclick = () => send({ type: 'key_special', key: 'escape' });
 document.getElementById('btn-tab').onclick = () => send({ type: 'key_special', key: 'tab' });
 document.getElementById('btn-enter').onclick = () => send({ type: 'key_special', key: 'enter' });
+document.getElementById('btn-bs').onclick = () => send({ type: 'key_special', key: 'backspace' });
 document.getElementById('btn-winkey').onclick = () => send({ type: 'key_special', key: 'win' });
 
 // Start
