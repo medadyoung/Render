@@ -105,6 +105,10 @@ public class NbInput {
         mouse_event(0x0002, 0, 0, 0, 0);
         mouse_event(0x0004, 0, 0, 0, 0);
     }
+    public static void Scroll(int clicks) {
+        // clicks > 0 = scroll up, clicks < 0 = scroll down
+        mouse_event(0x0800, 0, 0, (uint)(clicks * 120), 0); // MOUSEEVENTF_WHEEL
+    }
 }
 "@
 '''
@@ -182,6 +186,15 @@ def handle_event(msg: dict):
 
     elif t == "mouse_dblclick":
         run_ps(f"[NbInput]::DoubleClick({msg['x']}, {msg['y']})", timeout=3)
+
+    elif t == "mouse_scroll":
+        x, y = msg.get("x", 0), msg.get("y", 0)
+        dy = msg.get("dy", 0)
+        # Move to position, then scroll
+        clicks = max(-10, min(10, int(-dy / 30)))  # normalize delta
+        if clicks != 0:
+            run_ps(f"[NbInput]::MoveTo({x}, {y})", timeout=3)
+            run_ps(f"[NbInput]::Scroll({clicks})", timeout=3)
 
     elif t == "key_char":
         ch = msg.get("char", "")

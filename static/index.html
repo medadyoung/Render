@@ -268,6 +268,13 @@ document.addEventListener('keydown', (e) => {
   }
 });
 
+// Mouse wheel → scroll
+canvas.addEventListener('wheel', (e) => {
+  e.preventDefault();
+  const pos = canvasToScreen(e.clientX, e.clientY);
+  send({ type: 'mouse_scroll', x: pos.x, y: pos.y, dx: e.deltaX, dy: e.deltaY });
+}, { passive: false });
+
 // Right-click on canvas → send right click instead of context menu
 canvas.addEventListener('contextmenu', (e) => {
   e.preventDefault();
