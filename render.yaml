@@ -1,0 +1,11 @@
+services:
+  - type: web
+    name: nb-remote
+    runtime: python
+    buildCommand: pip install -r requirements.txt
+    startCommand: python server.py
+    envVars:
+      - key: NB_REMOTE_TOKEN
+        generateValue: true
+      - key: PYTHON_VERSION
+        value: "3.12"

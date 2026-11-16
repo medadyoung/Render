@@ -1,0 +1,196 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, maximum-scale=1, user-scalable=no">
+<title>NB Remote</title>
+<style>
+* { margin: 0; padding: 0; box-sizing: border-box; }
+body { background: #1a1a2e; color: #eee; font-family: system-ui, sans-serif; overflow: hidden; height: 100vh; display: flex; flex-direction: column; }
+#status { padding: 6px 12px; font-size: 13px; background: #16213e; text-align: center; flex-shrink: 0; }
+#status.connected { background: #0f3d0f; }
+#status.waiting { background: #3d2e0f; }
+#canvas-wrap { flex: 1; display: flex; align-items: center; justify-content: center; overflow: hidden; position: relative; }
+canvas { max-width: 100%; max-height: 100%; object-fit: contain; touch-action: none; cursor: crosshair; }
+#toolbar { display: flex; gap: 8px; padding: 6px; background: #16213e; flex-shrink: 0; justify-content: center; flex-wrap: wrap; }
+#toolbar button { padding: 6px 14px; border: 1px solid #444; border-radius: 6px; background: #0f3460; color: #eee; font-size: 13px; cursor: pointer; }
+#toolbar button:active { background: #e94560; }
+#keyboard-input { position: absolute; left: -9999px; opacity: 0; }
+</style>
+</head>
+<body>
+
+<div id="status" class="waiting">Connecting...</div>
+<div id="canvas-wrap">
+  <canvas id="screen"></canvas>
+</div>
+<div id="toolbar">
+  <button id="btn-keyboard">⌨ Keyboard</button>
+  <button id="btn-click">🖱 Click</button>
+  <button id="btn-rclick">🖱 Right</button>
+  <button id="btn-esc">Esc</button>
+  <button id="btn-tab">Tab</button>
+  <button id="btn-enter">Enter</button>
+  <button id="btn-winkey">⊞ Win</button>
+</div>
+<input id="keyboard-input" type="text" autocapitalize="off" autocomplete="off" autocorrect="off">
+
+<script>
+const canvas = document.getElementById('screen');
+const ctx = canvas.getContext('2d');
+const status = document.getElementById('status');
+const kbInput = document.getElementById('keyboard-input');
+
+let ws = null;
+let screenW = 1920, screenH = 1080;
+let clickMode = 'left'; // 'left' or 'right'
+let connected = false;
+
+function connect() {
+  const proto = location.protocol === 'https:' ? 'wss:' : 'ws:';
+  ws = new WebSocket(`${proto}//${location.host}/ws/phone`);
+  ws.binaryType = 'arraybuffer';
+
+  ws.onopen = () => {
+    status.textContent = 'Connected to relay, waiting for NB...';
+    status.className = 'waiting';
+  };
+
+  ws.onmessage = (ev) => {
+    if (ev.data instanceof ArrayBuffer) {
+      // Screenshot frame (JPEG bytes)
+      const blob = new Blob([ev.data], { type: 'image/jpeg' });
+      const url = URL.createObjectURL(blob);
+      const img = new Image();
+      img.onload = () => {
+        if (canvas.width !== img.width || canvas.height !== img.height) {
+          canvas.width = img.width;
+          canvas.height = img.height;
+        }
+        ctx.drawImage(img, 0, 0);
+        URL.revokeObjectURL(url);
+      };
+      img.src = url;
+    } else {
+      // JSON message
+      try {
+        const msg = JSON.parse(ev.data);
+        if (msg.type === 'nb_status') {
+          connected = msg.connected;
+          if (connected) {
+            status.textContent = '● NB Connected — tap to control';
+            status.className = 'connected';
+          } else {
+            status.textContent = 'NB disconnected — waiting...';
+            status.className = 'waiting';
+          }
+        } else if (msg.type === 'screen_info') {
+          screenW = msg.width;
+          screenH = msg.height;
+        }
+      } catch(e) {}
+    }
+  };
+
+  ws.onclose = () => {
+    status.textContent = 'Disconnected. Reconnecting...';
+    status.className = '';
+    connected = false;
+    setTimeout(connect, 3000);
+  };
+
+  ws.onerror = () => ws.close();
+}
+
+function send(obj) {
+  if (ws && ws.readyState === WebSocket.OPEN) {
+    ws.send(JSON.stringify(obj));
+  }
+}
+
+// Map canvas touch/click position to screen coordinates
+function canvasToScreen(clientX, clientY) {
+  const rect = canvas.getBoundingClientRect();
+  const scaleX = canvas.width / rect.width;
+  const scaleY = canvas.height / rect.height;
+  // Canvas pixels → actual screen pixels (canvas may be scaled from screenW×screenH)
+  const cx = (clientX - rect.left) * scaleX;
+  const cy = (clientY - rect.top) * scaleY;
+  // If canvas resolution differs from actual screen, map proportionally
+  const x = Math.round(cx * screenW / canvas.width);
+  const y = Math.round(cy * screenH / canvas.height);
+  return { x: Math.max(0, Math.min(screenW, x)), y: Math.max(0, Math.min(screenH, y)) };
+}
+
+// Touch events for mobile
+canvas.addEventListener('touchstart', (e) => {
+  e.preventDefault();
+  const t = e.touches[0];
+  const pos = canvasToScreen(t.clientX, t.clientY);
+  send({ type: 'mouse_move', x: pos.x, y: pos.y });
+  send({ type: 'mouse_click', button: clickMode, x: pos.x, y: pos.y });
+  clickMode = 'left'; // reset after right-click
+}, { passive: false });
+
+canvas.addEventListener('touchmove', (e) => {
+  e.preventDefault();
+  const t = e.touches[0];
+  const pos = canvasToScreen(t.clientX, t.clientY);
+  send({ type: 'mouse_move', x: pos.x, y: pos.y });
+}, { passive: false });
+
+// Mouse events (for testing on desktop)
+canvas.addEventListener('click', (e) => {
+  const pos = canvasToScreen(e.clientX, e.clientY);
+  send({ type: 'mouse_move', x: pos.x, y: pos.y });
+  send({ type: 'mouse_click', button: clickMode, x: pos.x, y: pos.y });
+  clickMode = 'left';
+});
+
+canvas.addEventListener('dblclick', (e) => {
+  e.preventDefault();
+  const pos = canvasToScreen(e.clientX, e.clientY);
+  send({ type: 'mouse_move', x: pos.x, y: pos.y });
+  send({ type: 'mouse_dblclick', button: 'left', x: pos.x, y: pos.y });
+});
+
+// Keyboard input
+kbInput.addEventListener('input', (e) => {
+  const ch = kbInput.value;
+  if (ch) {
+    for (const c of ch) {
+      send({ type: 'key_char', char: c });
+    }
+    kbInput.value = '';
+  }
+});
+
+kbInput.addEventListener('keydown', (e) => {
+  const special = {
+    'Backspace': 'backspace', 'Delete': 'delete', 'ArrowLeft': 'left',
+    'ArrowRight': 'right', 'ArrowUp': 'up', 'ArrowDown': 'down',
+    'Enter': 'enter', 'Escape': 'escape', 'Tab': 'tab',
+    'Home': 'home', 'End': 'end', 'PageUp': 'pageup', 'PageDown': 'pagedown',
+  };
+  if (special[e.key]) {
+    e.preventDefault();
+    send({ type: 'key_special', key: special[e.key] });
+  }
+});
+
+// Toolbar buttons
+document.getElementById('btn-keyboard').onclick = () => {
+  kbInput.focus();
+};
+document.getElementById('btn-click').onclick = () => { clickMode = 'left'; };
+document.getElementById('btn-rclick').onclick = () => { clickMode = 'right'; };
+document.getElementById('btn-esc').onclick = () => send({ type: 'key_special', key: 'escape' });
+document.getElementById('btn-tab').onclick = () => send({ type: 'key_special', key: 'tab' });
+document.getElementById('btn-enter').onclick = () => send({ type: 'key_special', key: 'enter' });
+document.getElementById('btn-winkey').onclick = () => send({ type: 'key_special', key: 'win' });
+
+// Start
+connect();
+</script>
+</body>
+</html>
