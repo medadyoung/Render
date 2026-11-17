@@ -1,12 +1,14 @@
 """
-NB-Remote Relay Server v1.2
+NB-Remote Relay Server v1.3
 Runs on Render.com (free tier). Bridges NB ↔ Phone/PC via WebSocket.
 
-Key design: non-blocking frame forwarding. If a phone client is slow,
-frames are dropped rather than blocking the NB connection.
+Key design: non-blocking frame forwarding with latest_frame pattern.
+NB sends base64 JSON frames. Server decodes to raw JPEG, stores latest.
+Phone clients pull raw JPEG bytes at their own pace (binary WS messages).
 """
 
 import asyncio
+import base64
 import json
 import os
 import time
@@ -18,10 +20,11 @@ nb_ws = None
 phone_clients = set()
 AUTH_TOKEN = os.environ.get("NB_REMOTE_TOKEN", "change-me-to-a-secret")
 
-# Latest frame — phones grab this on their own pace
-latest_frame = None
+# Latest frame as raw JPEG bytes — phones grab this at their own pace
+latest_frame_bytes = None
 frame_counter = 0
 nb_connect_time = 0
+screen_info = {"width": 1280, "height": 800}
 
 
 async def index(request):
@@ -42,11 +45,11 @@ async def health(request):
 
 async def ws_nb(request):
     """WebSocket endpoint for the NB client."""
-    global nb_ws, latest_frame, frame_counter, nb_connect_time
+    global nb_ws, latest_frame_bytes, frame_counter, nb_connect_time, screen_info
 
     ws = web.WebSocketResponse(
         max_msg_size=10 * 1024 * 1024,
-        heartbeat=20.0,  # server sends ping every 20s, expects pong
+        heartbeat=20.0,
     )
     await ws.prepare(request)
 
@@ -85,9 +88,17 @@ async def ws_nb(request):
             if msg.type == web.WSMsgType.TEXT:
                 try:
                     data = json.loads(msg.data)
-                    if data.get("type") == "frame":
-                        latest_frame = msg.data
+                    if data.get("type") == "frame" and data.get("data"):
+                        # Decode base64 → raw JPEG bytes
+                        latest_frame_bytes = base64.b64decode(data["data"])
                         frame_counter += 1
+                    elif data.get("type") == "screen_info":
+                        screen_info = {"width": data.get("width", 1280), "height": data.get("height", 800)}
+                        for pc in list(phone_clients):
+                            try:
+                                await pc.send_json({"type": "screen_info", **screen_info})
+                            except Exception:
+                                phone_clients.discard(pc)
                     else:
                         for pc in list(phone_clients):
                             try:
@@ -97,13 +108,10 @@ async def ws_nb(request):
                 except Exception:
                     pass
             elif msg.type == web.WSMsgType.BINARY:
-                latest_frame = msg.data
+                latest_frame_bytes = msg.data
                 frame_counter += 1
-            elif msg.type in (web.WSMsgType.CLOSE, web.WSMsgType.CLOSING, web.WSMsgType.CLOSED):
-                print(f"[relay] NB received close msg type={msg.type}")
-                break
-            elif msg.type == web.WSMsgType.ERROR:
-                print(f"[relay] NB ws error: {ws.exception()}")
+            elif msg.type in (web.WSMsgType.CLOSE, web.WSMsgType.CLOSING,
+                              web.WSMsgType.CLOSED, web.WSMsgType.ERROR):
                 break
     except Exception as e:
         print(f"[relay] NB handler exception: {e}")
@@ -111,7 +119,7 @@ async def ws_nb(request):
         elapsed = int(time.time() - nb_connect_time)
         print(f"[relay] NB disconnected after {elapsed}s, {frame_counter} frames")
         nb_ws = None
-        latest_frame = None
+        latest_frame_bytes = None
         for pc in list(phone_clients):
             try:
                 await pc.send_json({"type": "nb_status", "connected": False})
@@ -123,30 +131,36 @@ async def ws_nb(request):
 
 async def ws_phone(request):
     """WebSocket endpoint for phone/PC browsers."""
-    global nb_ws, latest_frame
+    global nb_ws, latest_frame_bytes
 
-    ws = web.WebSocketResponse(heartbeat=20.0)
+    ws = web.WebSocketResponse(
+        max_msg_size=1 * 1024 * 1024,
+        heartbeat=30.0,
+    )
     await ws.prepare(request)
     phone_clients.add(ws)
     print(f"[relay] Browser connected (total: {len(phone_clients)})")
 
-    await ws.send_json({"type": "nb_status", "connected": nb_ws is not None})
+    # Send initial status
+    try:
+        await ws.send_json({"type": "nb_status", "connected": nb_ws is not None})
+        await ws.send_json({"type": "screen_info", **screen_info})
+    except Exception:
+        phone_clients.discard(ws)
+        return ws
 
     async def push_frames():
-        """Send latest frame to this phone client at its own pace."""
+        """Send latest JPEG frame as binary to this phone client."""
         last_sent = None
         while not ws.closed:
-            frame = latest_frame
+            frame = latest_frame_bytes
             if frame is not None and frame is not last_sent:
                 try:
-                    if isinstance(frame, bytes):
-                        await ws.send_bytes(frame)
-                    else:
-                        await ws.send_str(frame)
+                    await ws.send_bytes(frame)
                     last_sent = frame
                 except Exception:
                     break
-            await asyncio.sleep(0.3)
+            await asyncio.sleep(0.4)  # ~2.5 FPS to phone
 
     async def recv_input():
         """Receive mouse/keyboard events from phone → forward to NB."""
