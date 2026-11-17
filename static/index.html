@@ -2,7 +2,7 @@
 <html lang="en">
 <head>
 <meta charset="utf-8">
-<meta name="viewport" content="width=device-width, initial-scale=1, minimum-scale=1, maximum-scale=1, user-scalable=no, viewport-fit=cover">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
 <meta name="mobile-web-app-capable" content="yes">
 <meta name="apple-mobile-web-app-capable" content="yes">
 <meta name="apple-mobile-web-app-status-bar-style" content="black-translucent">
@@ -306,16 +306,9 @@ canvas.addEventListener('contextmenu', (e) => {
   send({ type: 'mouse_click', button: 'right', x: pos.x, y: pos.y });
 });
 
-// Prevent mobile gestures
-document.addEventListener('touchmove', (e) => e.preventDefault(), { passive: false });
-document.addEventListener('gesturestart', (e) => e.preventDefault(), { passive: false });
-document.addEventListener('gesturechange', (e) => e.preventDefault(), { passive: false });
-
-// Fix viewport resize when keyboard appears
-const fixedHeight = window.innerHeight;
-window.addEventListener('resize', () => {
-  document.body.style.height = fixedHeight + 'px';
-});
+// On canvas: prevent default touch (we handle clicks ourselves)
+// Outside canvas: allow pinch zoom and scroll
+canvas.addEventListener('touchmove', (e) => e.preventDefault(), { passive: false });
 
 connect();
 </script>
