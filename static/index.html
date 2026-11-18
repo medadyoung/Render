@@ -57,7 +57,7 @@ const statusEl = document.getElementById('status');
 const kbInput = document.getElementById('keyboard-input');
 
 let ws = null;
-let screenW = 1920, screenH = 1080;
+let screenW = 1280, screenH = 800;  // NB actual resolution
 let clickMode = 'left';
 let connected = false;
 let paused = false;
@@ -244,8 +244,9 @@ document.getElementById('btn-kb-close').onclick = () => {
   kbInput.blur();
 };
 document.getElementById('btn-send-text').onclick = () => {
-  const text = kbInput.value;
-  if (text) { for (const c of text) send({ type: 'key_char', char: c }); kbInput.value = ''; }
+  // Characters already sent by input event — just clear and refocus
+  kbInput.value = '';
+  lastInputLen = 0;
   kbInput.focus();
 };
 

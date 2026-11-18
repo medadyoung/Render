@@ -16,7 +16,7 @@ param(
     [string]$Token  = $env:NB_REMOTE_TOKEN,
     [int]$FPS       = $(if ($env:NB_REMOTE_FPS)    { [int]$env:NB_REMOTE_FPS }    else { 2 }),
     [int]$Quality   = $(if ($env:NB_REMOTE_QUALITY) { [int]$env:NB_REMOTE_QUALITY } else { 35 }),
-    [double]$Scale  = 0.4
+    [double]$Scale  = 0.6
 )
 
 if (-not $Relay) { Write-Host "[nb] ERROR: -Relay or `$env:NB_REMOTE_RELAY required" -ForegroundColor Red; exit 1 }
@@ -82,7 +82,7 @@ function Get-ScreenJpeg {
 
 # ── Input handler ──
 $script:sendKeysMap = @{
-    "backspace"="{BS}"; "delete"="{DEL}"; "enter"="~"
+    "backspace"="{BS}"; "delete"="{DEL}"; "enter"="{ENTER}"
     "escape"="{ESC}"; "tab"="{TAB}"
     "left"="{LEFT}"; "right"="{RIGHT}"; "up"="{UP}"; "down"="{DOWN}"
     "home"="{HOME}"; "end"="{END}"; "pageup"="{PGUP}"; "pagedown"="{PGDN}"
@@ -253,7 +253,10 @@ while ($true) {
                     }
                     if ($result.MessageType -eq [System.Net.WebSockets.WebSocketMessageType]::Text -and $result.Count -gt 0) {
                         $text = [System.Text.Encoding]::UTF8.GetString($recvBuf, 0, $result.Count)
-                        try { Invoke-InputEvent ($text | ConvertFrom-Json) } catch { }
+                        Write-Host "[nb] INPUT: $text" -ForegroundColor Cyan
+                        try { Invoke-InputEvent ($text | ConvertFrom-Json) } catch {
+                            Write-Host "[nb] INPUT ERROR: $_" -ForegroundColor Red
+                        }
                     }
                     $recvTask = $socket.ReceiveAsync($recvSeg, [System.Threading.CancellationToken]::None)
                 }
