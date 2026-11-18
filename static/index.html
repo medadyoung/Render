@@ -159,14 +159,24 @@ canvas.addEventListener('dblclick', (e) => {
   send({ type: 'mouse_dblclick', button: 'left', x: pos.x, y: pos.y });
 });
 
-// Keyboard input — multiple strategies for desktop + mobile + IME (中文)
+// Keyboard input — clean 3-layer design:
+//   keydown  → special keys only (Enter, Backspace, arrows)
+//   input    → regular characters (desktop + mobile)
+//   composition → IME (中文注音, 日文, etc.)
 let composing = false;
-let lastInputLen = 0;
 
-// 1. keydown: catches special keys + desktop typing
+kbInput.addEventListener('compositionstart', () => { composing = true; });
+kbInput.addEventListener('compositionend', (e) => {
+  composing = false;
+  if (e.data) {
+    for (const c of e.data) send({ type: 'key_char', char: c });
+  }
+  kbInput.value = '';
+});
+
 kbInput.addEventListener('keydown', (e) => {
   e.stopPropagation();
-  if (composing) return; // IME active, wait for compositionend
+  if (composing) return;
   const special = {
     'Backspace': 'backspace', 'Delete': 'delete', 'ArrowLeft': 'left',
     'ArrowRight': 'right', 'ArrowUp': 'up', 'ArrowDown': 'down',
@@ -175,50 +185,17 @@ kbInput.addEventListener('keydown', (e) => {
   if (special[e.key]) {
     e.preventDefault();
     send({ type: 'key_special', key: special[e.key] });
-  } else if (e.key.length === 1 && !e.ctrlKey && !e.altKey && !e.metaKey) {
-    e.preventDefault();
-    send({ type: 'key_char', char: e.key });
   }
+  // Regular chars: don't handle here — let input event do it
 });
 
-// 2. beforeinput: catches mobile backspace when input is empty (keydown may not fire)
-kbInput.addEventListener('beforeinput', (e) => {
-  if (e.inputType === 'deleteContentBackward') {
-    if (kbInput.value.length === 0) {
-      e.preventDefault();
-      send({ type: 'key_special', key: 'backspace' });
-    }
-  }
-});
-
-// 3. input: catches mobile keyboard letters (keydown may give key='Unidentified')
-kbInput.addEventListener('input', (e) => {
-  if (composing) return; // IME still composing
+kbInput.addEventListener('input', () => {
+  if (composing) return;
   const val = kbInput.value;
-  if (val.length > lastInputLen) {
-    // New chars added — send them
-    const newChars = val.slice(lastInputLen);
-    for (const c of newChars) send({ type: 'key_char', char: c });
-  } else if (val.length < lastInputLen) {
-    // Chars deleted (mobile backspace)
-    const deleted = lastInputLen - val.length;
-    for (let i = 0; i < deleted; i++) send({ type: 'key_special', key: 'backspace' });
+  if (val) {
+    for (const c of val) send({ type: 'key_char', char: c });
+    kbInput.value = '';
   }
-  lastInputLen = val.length;
-  // Clear periodically to prevent buildup
-  if (val.length > 50) { kbInput.value = ''; lastInputLen = 0; }
-});
-
-// 4. compositionstart/end: handles IME input (中文, 日文, etc.)
-kbInput.addEventListener('compositionstart', () => { composing = true; });
-kbInput.addEventListener('compositionend', (e) => {
-  composing = false;
-  const text = e.data;
-  if (text) {
-    for (const c of text) send({ type: 'key_char', char: c });
-  }
-  kbInput.value = '';
-  lastInputLen = 0;
 });
 
 // Toolbar
@@ -244,9 +221,13 @@ document.getElementById('btn-kb-close').onclick = () => {
   kbInput.blur();
 };
 document.getElementById('btn-send-text').onclick = () => {
-  // Characters already sent by input event — just clear and refocus
+  // If there's unsent text (e.g. IME not committed), send it
+  const val = kbInput.value;
+  if (val) {
+    for (const c of val) send({ type: 'key_char', char: c });
+  }
   kbInput.value = '';
-  lastInputLen = 0;
+  send({ type: 'key_special', key: 'enter' });
   kbInput.focus();
 };
 
